@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import gspread
+import random
 from google.oauth2.service_account import Credentials
 from fastmcp import FastMCP
 
@@ -10,10 +11,10 @@ mcp = FastMCP("TicmintAgent")
 
 @mcp.tool
 def fetch_data() -> list[dict]:
-    """Fetches real recent event organizer posts from Reddit, with a fallback if blocked."""
+    """Fetches real recent event organizer posts from Reddit, with a randomized fallback if blocked."""
     print("Scraping live Reddit data...")
     url = "https://www.reddit.com/r/EventProduction/new.json?limit=5"
-    headers = {"User-Agent": "TicmintGrowthAgent/1.0"}
+    headers = {"User-Agent": "TicmintGrowthAgent/1.1"}
     
     try:
         res = requests.get(url, headers=headers, timeout=10)
@@ -34,12 +35,34 @@ def fetch_data() -> list[dict]:
     except Exception as e:
         print(f"Reddit Scraping Error: {e}")
         
-    print("Injecting fallback test post so the pipeline doesn't crash...")
-    return [{
-        "author": "event_planner_demo",
-        "content": "I'm organizing a mid-sized conference next month and I am so tired of Eventbrite taking such a huge cut of my ticket sales. Plus, they don't let me white-label the checkout process on my own domain, so it looks unprofessional. Does anyone know of a good white-label ticketing platform where I can keep 100% of my attendee data?",
-        "url": "https://reddit.com/r/EventProduction/test-post"
-    }]
+    print("Injecting a randomized fallback test post so the pipeline doesn't crash...")
+    
+    # List of realistic problems Ticmint solves
+    fallbacks = [
+        {
+            "author": "event_planner_demo",
+            "content": "I'm organizing a mid-sized conference next month and I am so tired of Eventbrite taking such a huge cut of my ticket sales. Plus, they don't let me white-label the checkout.",
+            "url": "https://reddit.com/r/EventProduction/test-post-1"
+        },
+        {
+            "author": "growth_marketer_99",
+            "content": "Does anyone know a ticketing platform where I actually own my attendee data? I hate that Luma and others keep my customer list in their ecosystem.",
+            "url": "https://reddit.com/r/EventProduction/test-post-2"
+        },
+        {
+            "author": "uk_festival_ops",
+            "content": "Looking to move away from Cvent. The payouts take way too long. I need a platform that integrates directly with Stripe so I get my ticket money immediately.",
+            "url": "https://reddit.com/r/EventProduction/test-post-3"
+        },
+        {
+            "author": "corporate_events_pro",
+            "content": "Is there a ticketing app that actually embeds on my WordPress site cleanly? Everything I try uses an ugly iframe that ruins our branding.",
+            "url": "https://reddit.com/r/EventProduction/test-post-4"
+        }
+    ]
+    
+    # Pick one random post from the list
+    return [random.choice(fallbacks)]
 
 @mcp.tool
 def save_to_sheet(rows: list[list[str]]) -> bool:
@@ -64,7 +87,7 @@ def main():
     
     prompt = f"""
     You are a Growth Lead. Read these Reddit posts.
-    Identify ONLY posts where the user is frustrated with their current ticketing platform (fees, lack of branding, etc).
+    Identify ONLY posts where the user is frustrated with their current ticketing platform (fees, lack of branding, payouts, data ownership).
     If no one is complaining, return an empty JSON array: []
     Otherwise, return a valid JSON array of objects with keys: author, url, pain_point, outreach_draft.
     Posts: {json.dumps(posts)}
@@ -81,7 +104,6 @@ def main():
         
         data = res.json()
         
-        # If the AI throws an error (quota/safety block), this triggers the Emergency Net
         if 'error' in data:
             raise Exception(data['error'].get('message', 'Unknown API Error'))
             
@@ -101,8 +123,8 @@ def main():
         
     except Exception as e:
         print(f"AI evaluation blocked ({e}). Triggering Emergency Bypass...")
-        # The ultimate fallback so your video demo always works
-        rows = [["event_planner_demo", "[https://reddit.com/r/EventProduction/test-post](https://reddit.com/r/EventProduction/test-post)", "Frustrated with 10% platform fees and lack of white-labeling.", "Hey, saw your post about platform fees. Ticmint lets you keep 100% of your data and white-label everything. Let's chat!"]]
+        # Fallback if Gemini API fails entirely
+        rows = [["error_fallback", "[https://reddit.com/error](https://reddit.com/error)", "API Limit Reached", "Hey, noticed you're looking for white-label ticketing. Ticmint can help."]]
 
     success = save_to_sheet(rows)
     if success:
