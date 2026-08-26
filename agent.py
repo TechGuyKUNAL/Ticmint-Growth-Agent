@@ -10,12 +10,27 @@ mcp = FastMCP("TicmintAgent")
 
 @mcp.tool
 def fetch_data() -> list[dict]:
-    """Fetches event organizer complaints."""
-    return [{
-        "author": "event_planner_demo", 
-        "content": "I am so tired of Eventbrite taking 10% of my ticket sales. I need a platform I can white-label.", 
-        "url": "https://reddit.com/r/EventProduction/demo"
-    }]
+    """Fetches real recent event organizer posts from Reddit."""
+    print("Scraping live Reddit data...")
+    url = "https://www.reddit.com/r/EventProduction/new.json?limit=15"
+    headers = {"User-Agent": "TicmintGrowthAgent/1.0"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            posts = []
+            for item in res.json().get("data", {}).get("children", []):
+                p = item["data"]
+                # Only grab text posts (skip image-only posts)
+                if p.get("selftext"):
+                    posts.append({
+                        "author": p.get("author", "user"),
+                        "content": p.get("selftext", "")[:300],
+                        "url": f"https://reddit.com{p.get('permalink')}"
+                    })
+            return posts
+    except Exception as e:
+        print(f"Reddit Scraping Error: {e}")
+    return []
 
 @mcp.tool
 def save_to_sheet(rows: list[list[str]]) -> bool:
@@ -33,19 +48,27 @@ def save_to_sheet(rows: list[list[str]]) -> bool:
         return False
 
 def main():
-    print("Starting agent...")
+    print("Starting Live Agent...")
     posts = fetch_data()
     
+    if not posts:
+        print("No posts fetched from Reddit. Exiting.")
+        return
+
+    print(f"Found {len(posts)} live posts. Evaluating intent with AI...")
+    
     prompt = f"""
-    You are a Growth Lead. Return ONLY a valid JSON array of objects with keys: author, url, pain_point, outreach_draft.
-    Based on this post: {json.dumps(posts)}
+    You are a Growth Lead. Read these Reddit posts.
+    Identify ONLY posts where the user is frustrated with their current ticketing platform (e.g., fees, payouts, lack of branding).
+    If no one is complaining about ticketing, return an empty JSON array: []
+    Otherwise, return a valid JSON array of objects with keys: author, url, pain_point, outreach_draft.
+    Posts: {json.dumps(posts)}
     """
     
     api_key = os.environ.get("GEMINI_API_KEY")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     try:
-        print("Asking AI...")
         res = requests.post(url, headers={"Content-Type": "application/json"}, json={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"}
@@ -58,20 +81,20 @@ def main():
             raw_text = raw_text[7:-3]
             
         leads = json.loads(raw_text)
-        rows = [[L.get("author",""), L.get("url",""), L.get("pain_point",""), L.get("outreach_draft","")] for L in leads]
         
+        if not leads:
+            print("AI determined no users are complaining about ticketing platforms today. Exiting smoothly.")
+            return
+            
+        rows = [[L.get("author",""), L.get("url",""), L.get("pain_point",""), L.get("outreach_draft","")] for L in leads]
+        print(f"Found {len(rows)} qualified leads! Saving to sheet...")
+        success = save_to_sheet(rows)
+        
+        if success:
+            print("SUCCESS: Live Data saved to Google Sheet!")
+            
     except Exception as e:
-        print(f"AI encountered an error, but using backup data so your demo works! Error: {e}")
-        # Emergency Net: This guarantees data reaches your sheet even if the AI fails
-        rows = [["event_planner_demo", "[https://reddit.com/r/EventProduction/demo](https://reddit.com/r/EventProduction/demo)", "Frustrated with 10% platform fees and lack of white-labeling.", "Hey, saw your post about platform fees. Ticmint lets you keep 100% of your data and white-label everything. Let's chat!"]]
-
-    print("Saving to sheet...")
-    success = save_to_sheet(rows)
-    
-    if success:
-        print("SUCCESS: Data saved to Google Sheet!")
-    else:
-        print("FAILED to save to Google Sheet. Check your GCP_CREDENTIALS and SHEET_ID.")
+        print(f"AI evaluation failed: {e}")
 
 if __name__ == "__main__":
     main()
