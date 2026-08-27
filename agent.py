@@ -15,9 +15,8 @@ from mcp_server import mcp
 
 GEMINI_MODEL = os.environ.get(
     "GEMINI_MODEL",
-    "gemini-2.5-flash",
+    "gemini-3.6-flash",
 )
-
 
 # ============================================================
 # GEMINI CLIENT
