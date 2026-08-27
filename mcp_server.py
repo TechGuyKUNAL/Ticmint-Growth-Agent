@@ -91,8 +91,7 @@ def search_demand_signals() -> list[dict]:
     print("MCP: Searching Hacker News demand signals...")
 
     all_results = {}
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    cutoff_timestamp = int(cutoff.timestamp())
+    "numericFilters": f"created_at_i>{cutoff_timestamp}",
 
     for query in SEARCH_QUERIES:
         try:
