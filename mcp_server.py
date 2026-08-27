@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import time
 from datetime import datetime, timezone
 
 import requests
@@ -21,120 +20,157 @@ mcp = FastMCP("TicmintDemandCapture")
 # CONFIGURATION
 # ============================================================
 
-# ------------------------------------------------------------
-# Hacker News
-# ------------------------------------------------------------
-
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 
-
-# ------------------------------------------------------------
-# Stack Exchange / Stack Overflow
-# ------------------------------------------------------------
-
-STACK_EXCHANGE_SEARCH_URL = (
-    "https://api.stackexchange.com/2.3/search/advanced"
-)
-
-
-# ------------------------------------------------------------
-# GitHub
-# ------------------------------------------------------------
-
-GITHUB_SEARCH_URL = (
-    "https://api.github.com/search/issues"
-)
-
-
-# ------------------------------------------------------------
-# DEV Community
-# ------------------------------------------------------------
-
-DEV_SEARCH_URL = (
-    "https://dev.to/api/articles/search"
-)
-
-
-# ------------------------------------------------------------
-# Lobsters
-# ------------------------------------------------------------
-
-LOBSTERS_NEWEST_URL = (
-    "https://lobste.rs/newest.json"
-)
-
-LOBSTERS_HOTTEST_URL = (
-    "https://lobste.rs/hottest.json"
-)
-
-
-# ============================================================
-# SEARCH QUERIES
-# ============================================================
-
-HN_SEARCH_QUERIES = [
+# Broad discovery queries.
+# The relevance filter below will remove generic conversations.
+SEARCH_QUERIES = [
     "Eventbrite",
-    "ticketing",
-    "event tickets",
-    "event registration",
-    "conference tickets",
-    "event platform",
     "ticketing platform",
-]
-
-
-STACK_SEARCH_QUERIES = [
-    "Eventbrite",
-    "ticketing",
     "event registration",
+    "event tickets",
     "event platform",
+    "conference ticketing",
+    "ticketing software",
 ]
 
+# Number of results requested for each query.
+RESULTS_PER_QUERY = 50
 
-DEV_SEARCH_QUERIES = [
-    "Eventbrite",
-    "ticketing",
-    "event registration",
-]
+# Maximum amount of content sent to Gemini per signal.
+MAX_CONTENT_LENGTH = 1800
 
 
 # ============================================================
-# COMMON KEYWORDS
+# RELEVANCE KEYWORDS
 # ============================================================
 
-EVENT_KEYWORDS = [
+# These indicate that someone may actually be involved
+# in organising or operating an event.
+
+ORGANISER_KEYWORDS = [
+    "organize an event",
+    "organise an event",
+    "organizing an event",
+    "organising an event",
+    "organizer",
+    "organiser",
+    "event organizer",
+    "event organiser",
+    "event company",
+    "event business",
+    "conference organizer",
+    "conference organiser",
+    "conference organizer",
+    "conference organiser",
+    "festival organizer",
+    "festival organiser",
+    "meetup organizer",
+    "meetup organiser",
+    "event manager",
+    "event management",
+    "run events",
+    "running events",
+    "host events",
+    "hosting events",
+    "event host",
+    "event production",
+    "event production company",
+    "event agency",
+    "event agency",
+    "our event",
+    "my event",
+    "we run",
+    "we organize",
+    "we organise",
+    "i organize",
+    "i organise",
+    "i run events",
+    "we run events",
+]
+
+
+# These indicate an actual ticketing/platform discussion.
+
+TICKETING_KEYWORDS = [
     "eventbrite",
     "ticketing",
-    "ticket",
-    "tickets",
+    "ticketing platform",
+    "ticketing software",
+    "ticket platform",
+    "ticket platform",
     "event registration",
     "registration platform",
+    "registration software",
+    "event tickets",
+    "tickets",
+    "checkout",
+    "ticket sales",
+    "ticket fees",
+    "ticket fee",
+    "booking platform",
     "event platform",
-    "event management",
-    "conference",
-    "festival",
-    "event organizer",
-    "event organiser",
-    "event organizer",
-    "event organiser",
+    "attendee management",
+    "attendee data",
+    "event management platform",
 ]
 
 
-# ============================================================
-# HTTP SESSION
-# ============================================================
+# These indicate business pain, buying intent, or
+# evaluation of alternatives.
 
-SESSION = requests.Session()
-
-SESSION.headers.update(
-    {
-        "User-Agent": (
-            "Ticmint-Demand-Capture-Agent/1.0 "
-            "(public demand research)"
-        ),
-        "Accept": "application/json",
-    }
-)
+BUYING_SIGNAL_KEYWORDS = [
+    "looking for",
+    "looking to",
+    "alternative",
+    "alternatives",
+    "switch",
+    "switching",
+    "replace",
+    "replacing",
+    "move away",
+    "moving away",
+    "migrate",
+    "migration",
+    "compare",
+    "comparing",
+    "recommend",
+    "recommendation",
+    "recommendations",
+    "better than",
+    "instead of",
+    "problem with",
+    "problems with",
+    "issue with",
+    "issues with",
+    "frustrated",
+    "frustrating",
+    "expensive",
+    "fees",
+    "fee",
+    "commission",
+    "pricing",
+    "cost",
+    "checkout problem",
+    "checkout problems",
+    "api limitation",
+    "api limitations",
+    "integration problem",
+    "integration problems",
+    "customer support",
+    "poor support",
+    "bad support",
+    "white label",
+    "white-label",
+    "branding",
+    "own domain",
+    "own website",
+    "own checkout",
+    "attendee data",
+    "data ownership",
+    "payout",
+    "payouts",
+]
 
 
 # ============================================================
@@ -154,7 +190,7 @@ def clean_html(raw_html: str) -> str:
     text = re.sub(
         cleanr,
         "",
-        str(raw_html),
+        raw_html,
     )
 
     replacements = {
@@ -168,1257 +204,153 @@ def clean_html(raw_html: str) -> str:
     }
 
     for old, new in replacements.items():
-
-        text = text.replace(
-            old,
-            new,
-        )
+        text = text.replace(old, new)
 
     return text.strip()
 
 
-def contains_relevant_keyword(text: str) -> bool:
+def normalize_text(text: str) -> str:
     """
-    Check whether text contains at least one
-    Ticmint-relevant keyword.
+    Normalize text for keyword matching.
     """
 
     if not text:
-        return False
+        return ""
 
-    lowered = text.lower()
+    text = text.lower()
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+def contains_any(
+    text: str,
+    keywords: list[str],
+) -> bool:
+    """
+    Return True if the text contains at least one
+    keyword from the supplied list.
+    """
+
+    normalized = normalize_text(text)
 
     return any(
-        keyword in lowered
-        for keyword in EVENT_KEYWORDS
+        keyword.lower() in normalized
+        for keyword in keywords
     )
 
 
-def safe_request(
-    url: str,
-    params: dict | None = None,
-    headers: dict | None = None,
-    timeout: int = 20,
-    retries: int = 2,
-):
+def relevance_score(content: str) -> int:
     """
-    Make a resilient HTTP GET request.
+    Calculate a simple deterministic relevance score.
 
-    Temporary 429/500/502/503/504 errors are retried.
-    A source failure is allowed to return None so that
-    other sources can continue running.
+    This does NOT replace Gemini qualification.
+
+    It only removes obviously irrelevant conversations
+    before sending them to Gemini.
     """
 
-    for attempt in range(retries + 1):
+    text = normalize_text(content)
 
-        try:
+    organiser_matches = sum(
+        1
+        for keyword in ORGANISER_KEYWORDS
+        if keyword.lower() in text
+    )
 
-            response = SESSION.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-            )
+    ticketing_matches = sum(
+        1
+        for keyword in TICKETING_KEYWORDS
+        if keyword.lower() in text
+    )
 
-            # ------------------------------------------------
-            # Successful response
-            # ------------------------------------------------
+    buying_matches = sum(
+        1
+        for keyword in BUYING_SIGNAL_KEYWORDS
+        if keyword.lower() in text
+    )
 
-            if response.status_code == 200:
+    score = 0
 
-                return response
+    # Organiser evidence.
+    score += min(
+        organiser_matches * 3,
+        9,
+    )
 
-            # ------------------------------------------------
-            # Temporary errors
-            # ------------------------------------------------
+    # Ticketing evidence.
+    score += min(
+        ticketing_matches * 3,
+        9,
+    )
 
-            if response.status_code in {
-                429,
-                500,
-                502,
-                503,
-                504,
-            }:
+    # Buying signal.
+    score += min(
+        buying_matches * 4,
+        12,
+    )
 
-                if attempt < retries:
-
-                    wait_time = (
-                        2 ** attempt
-                    )
-
-                    print(
-                        f"Temporary HTTP "
-                        f"{response.status_code} "
-                        f"from {url}. "
-                        f"Retrying in "
-                        f"{wait_time}s..."
-                    )
-
-                    time.sleep(
-                        wait_time
-                    )
-
-                    continue
-
-                print(
-                    f"HTTP {response.status_code} "
-                    f"after retries: {url}"
-                )
-
-                return None
-
-            # ------------------------------------------------
-            # Permanent / other error
-            # ------------------------------------------------
-
-            print(
-                f"HTTP {response.status_code} "
-                f"from {url}"
-            )
-
-            return None
-
-        except requests.RequestException as error:
-
-            if attempt < retries:
-
-                wait_time = (
-                    2 ** attempt
-                )
-
-                print(
-                    f"Request error for {url}: "
-                    f"{error}. "
-                    f"Retrying in "
-                    f"{wait_time}s..."
-                )
-
-                time.sleep(
-                    wait_time
-                )
-
-                continue
-
-            print(
-                f"Request failed after retries: "
-                f"{url}: {error}"
-            )
-
-            return None
-
-        except Exception as error:
-
-            print(
-                f"Unexpected HTTP error "
-                f"for {url}: {error}"
-            )
-
-            return None
-
-    return None
+    return score
 
 
-def normalize_signal(
-    source: str,
-    source_id: str,
-    author: str,
-    content: str,
-    url: str,
-    created_at: str,
-    search_query: str,
-) -> dict | None:
+def is_relevant_signal(content: str) -> bool:
     """
-    Convert every source into the same signal format.
-    """
+    Determine whether a Hacker News comment has enough
+    evidence to be worth sending to Gemini.
 
-    content = clean_html(
-        content
-    ).strip()
+    Requirements:
+
+    A) Must contain ticketing/event-platform evidence.
+
+    AND
+
+    B) Must contain organiser/business evidence OR
+       meaningful buying/pain evidence.
+    """
 
     if not content:
+        return False
 
-        return None
+    text = normalize_text(content)
 
-    return {
-        "source": source,
-        "source_id": str(
-            source_id
-        ),
-        "author": author or "Unknown",
-        "content": content[:2000],
-        "url": url or "",
-        "created_at": created_at or "",
-        "search_query": search_query or "",
-    }
+    has_ticketing = contains_any(
+        text,
+        TICKETING_KEYWORDS,
+    )
+
+    if not has_ticketing:
+        return False
+
+    has_organiser = contains_any(
+        text,
+        ORGANISER_KEYWORDS,
+    )
+
+    has_buying_signal = contains_any(
+        text,
+        BUYING_SIGNAL_KEYWORDS,
+    )
+
+    score = relevance_score(text)
+
+    # Strong organiser + ticketing signal.
+    if has_organiser and score >= 6:
+        return True
+
+    # Strong buying/pain + ticketing signal.
+    if has_buying_signal and score >= 7:
+        return True
+
+    return False
 
 
 # ============================================================
-# SOURCE 1
-# HACKER NEWS
-# ============================================================
-
-def search_hacker_news() -> list[dict]:
-    """
-    Collect relevant public Hacker News comments.
-    """
-
-    print(
-        "\nMCP: Starting Hacker News collection..."
-    )
-
-    all_results = {}
-
-    for query in HN_SEARCH_QUERIES:
-
-        print(
-            f"MCP: Hacker News -> {query}"
-        )
-
-        params = {
-            "query": query,
-            "tags": "comment",
-            "hitsPerPage": 20,
-        }
-
-        response = safe_request(
-            HN_SEARCH_URL,
-            params=params,
-            timeout=15,
-        )
-
-        if response is None:
-
-            print(
-                f"MCP: Skipping Hacker News "
-                f"query: {query}"
-            )
-
-            continue
-
-        try:
-
-            data = response.json()
-
-            for item in data.get(
-                "hits",
-                [],
-            ):
-
-                object_id = item.get(
-                    "objectID"
-                )
-
-                if not object_id:
-
-                    continue
-
-                comment_text = clean_html(
-                    item.get(
-                        "comment_text",
-                        "",
-                    )
-                )
-
-                if not comment_text:
-
-                    continue
-
-                signal = normalize_signal(
-                    source="Hacker News",
-                    source_id=str(
-                        object_id
-                    ),
-                    author=item.get(
-                        "author",
-                        "Unknown",
-                    ),
-                    content=comment_text,
-                    url=(
-                        "https://news.ycombinator.com/"
-                        f"item?id={object_id}"
-                    ),
-                    created_at=item.get(
-                        "created_at",
-                        "",
-                    ),
-                    search_query=query,
-                )
-
-                if signal:
-
-                    all_results[
-                        str(object_id)
-                    ] = signal
-
-        except Exception as error:
-
-            print(
-                f"MCP: Hacker News parsing "
-                f"error for '{query}': "
-                f"{error}"
-            )
-
-    results = list(
-        all_results.values()
-    )
-
-    print(
-        f"MCP: Hacker News collected "
-        f"{len(results)} unique signals."
-    )
-
-    return results
-
-
-# ============================================================
-# SOURCE 2
-# STACK EXCHANGE / STACK OVERFLOW
-# ============================================================
-
-def search_stack_exchange() -> list[dict]:
-    """
-    Search Stack Overflow for public questions related
-    to event ticketing and Eventbrite.
-    """
-
-    print(
-        "\nMCP: Starting Stack Overflow collection..."
-    )
-
-    all_results = {}
-
-    for query in STACK_SEARCH_QUERIES:
-
-        print(
-            f"MCP: Stack Overflow -> {query}"
-        )
-
-        params = {
-            "site": "stackoverflow",
-            "q": query,
-            "sort": "activity",
-            "order": "desc",
-            "pagesize": 20,
-            "page": 1,
-        }
-
-        response = safe_request(
-            STACK_EXCHANGE_SEARCH_URL,
-            params=params,
-            timeout=20,
-        )
-
-        if response is None:
-
-            print(
-                f"MCP: Skipping Stack Overflow "
-                f"query: {query}"
-            )
-
-            continue
-
-        try:
-
-            data = response.json()
-
-            for item in data.get(
-                "items",
-                [],
-            ):
-
-                question_id = item.get(
-                    "question_id"
-                )
-
-                if not question_id:
-
-                    continue
-
-                title = clean_html(
-                    item.get(
-                        "title",
-                        "",
-                    )
-                )
-
-                tags = item.get(
-                    "tags",
-                    [],
-                )
-
-                tag_text = ", ".join(
-                    tags
-                )
-
-                content = (
-                    f"Question: {title}"
-                )
-
-                if tag_text:
-
-                    content += (
-                        f"\nTags: {tag_text}"
-                    )
-
-                link = item.get(
-                    "link",
-                    "",
-                )
-
-                owner = item.get(
-                    "owner",
-                    {},
-                )
-
-                author = owner.get(
-                    "display_name",
-                    "Unknown",
-                )
-
-                created_timestamp = item.get(
-                    "creation_date",
-                    "",
-                )
-
-                created_at = ""
-
-                if created_timestamp:
-
-                    try:
-
-                        created_at = (
-                            datetime.fromtimestamp(
-                                created_timestamp,
-                                timezone.utc,
-                            ).isoformat()
-                        )
-
-                    except Exception:
-
-                        created_at = ""
-
-                signal = normalize_signal(
-                    source="Stack Overflow",
-                    source_id=str(
-                        question_id
-                    ),
-                    author=author,
-                    content=content,
-                    url=link,
-                    created_at=created_at,
-                    search_query=query,
-                )
-
-                if signal:
-
-                    all_results[
-                        str(question_id)
-                    ] = signal
-
-        except Exception as error:
-
-            print(
-                f"MCP: Stack Overflow "
-                f"parsing error for "
-                f"'{query}': {error}"
-            )
-
-    results = list(
-        all_results.values()
-    )
-
-    print(
-        f"MCP: Stack Overflow collected "
-        f"{len(results)} unique signals."
-    )
-
-    return results
-
-
-# ============================================================
-# SOURCE 3
-# GITHUB
-# ============================================================
-
-def search_github() -> list[dict]:
-    """
-    Search public GitHub issues for conversations involving
-    Eventbrite, ticketing and event registration.
-
-    Optional:
-        GITHUB_TOKEN
-
-    If no token is supplied, GitHub's public unauthenticated
-    search API is used.
-    """
-
-    print(
-        "\nMCP: Starting GitHub collection..."
-    )
-
-    results = {}
-
-    github_token = os.environ.get(
-        "GITHUB_TOKEN"
-    )
-
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2026-03-10",
-    }
-
-    if github_token:
-
-        headers[
-            "Authorization"
-        ] = f"Bearer {github_token}"
-
-        print(
-            "MCP: GitHub authentication enabled."
-        )
-
-    else:
-
-        print(
-            "MCP: GitHub running without "
-            "authentication."
-        )
-
-    query = (
-        '"Eventbrite" '
-        'OR "ticketing" '
-        'OR "event registration" '
-        'OR "event platform"'
-    )
-
-    print(
-        f"MCP: GitHub -> {query}"
-    )
-
-    params = {
-        "q": query,
-        "sort": "updated",
-        "order": "desc",
-        "per_page": 50,
-        "page": 1,
-    }
-
-    response = safe_request(
-        GITHUB_SEARCH_URL,
-        params=params,
-        headers=headers,
-        timeout=20,
-    )
-
-    if response is None:
-
-        print(
-            "MCP: GitHub collection skipped."
-        )
-
-        return []
-
-    try:
-
-        data = response.json()
-
-        for item in data.get(
-            "items",
-            [],
-        ):
-
-            issue_id = item.get(
-                "id"
-            )
-
-            if not issue_id:
-
-                continue
-
-            title = clean_html(
-                item.get(
-                    "title",
-                    "",
-                )
-            )
-
-            body = clean_html(
-                item.get(
-                    "body",
-                    "",
-                )
-            )
-
-            content_parts = []
-
-            if title:
-
-                content_parts.append(
-                    f"Issue: {title}"
-                )
-
-            if body:
-
-                content_parts.append(
-                    f"Description: {body}"
-                )
-
-            content = "\n".join(
-                content_parts
-            )
-
-            if not content:
-
-                continue
-
-            user = item.get(
-                "user",
-                {},
-            )
-
-            author = user.get(
-                "login",
-                "Unknown",
-            )
-
-            signal = normalize_signal(
-                source="GitHub",
-                source_id=str(
-                    issue_id
-                ),
-                author=author,
-                content=content,
-                url=item.get(
-                    "html_url",
-                    "",
-                ),
-                created_at=item.get(
-                    "created_at",
-                    "",
-                ),
-                search_query=query,
-            )
-
-            if signal:
-
-                results[
-                    str(issue_id)
-                ] = signal
-
-    except Exception as error:
-
-        print(
-            f"MCP: GitHub parsing error: "
-            f"{error}"
-        )
-
-    final_results = list(
-        results.values()
-    )
-
-    print(
-        f"MCP: GitHub collected "
-        f"{len(final_results)} "
-        f"unique signals."
-    )
-
-    return final_results
-
-
-# ============================================================
-# SOURCE 4
-# DEV COMMUNITY
-# ============================================================
-
-def search_dev_community() -> list[dict]:
-    """
-    Search DEV Community for public articles/discussions
-    related to event ticketing and Eventbrite.
-    """
-
-    print(
-        "\nMCP: Starting DEV Community collection..."
-    )
-
-    all_results = {}
-
-    for query in DEV_SEARCH_QUERIES:
-
-        print(
-            f"MCP: DEV -> {query}"
-        )
-
-        params = {
-            "q": query,
-            "per_page": 20,
-            "page": 1,
-        }
-
-        response = safe_request(
-            DEV_SEARCH_URL,
-            params=params,
-            timeout=20,
-        )
-
-        if response is None:
-
-            print(
-                f"MCP: Skipping DEV query: "
-                f"{query}"
-            )
-
-            continue
-
-        try:
-
-            data = response.json()
-
-            if not isinstance(
-                data,
-                list,
-            ):
-
-                continue
-
-            for item in data:
-
-                article_id = item.get(
-                    "id"
-                )
-
-                if not article_id:
-
-                    continue
-
-                title = clean_html(
-                    item.get(
-                        "title",
-                        "",
-                    )
-                )
-
-                description = clean_html(
-                    item.get(
-                        "description",
-                        "",
-                    )
-                )
-
-                content_parts = []
-
-                if title:
-
-                    content_parts.append(
-                        f"Title: {title}"
-                    )
-
-                if description:
-
-                    content_parts.append(
-                        f"Description: "
-                        f"{description}"
-                    )
-
-                content = "\n".join(
-                    content_parts
-                )
-
-                if not contains_relevant_keyword(
-                    content
-                ):
-
-                    continue
-
-                user = item.get(
-                    "user",
-                    {},
-                )
-
-                author = user.get(
-                    "username",
-                    "Unknown",
-                )
-
-                url = (
-                    item.get(
-                        "url"
-                    )
-                    or item.get(
-                        "canonical_url"
-                    )
-                    or ""
-                )
-
-                created_at = (
-                    item.get(
-                        "published_at"
-                    )
-                    or item.get(
-                        "created_at"
-                    )
-                    or ""
-                )
-
-                signal = normalize_signal(
-                    source="DEV Community",
-                    source_id=str(
-                        article_id
-                    ),
-                    author=author,
-                    content=content,
-                    url=url,
-                    created_at=created_at,
-                    search_query=query,
-                )
-
-                if signal:
-
-                    all_results[
-                        str(article_id)
-                    ] = signal
-
-        except Exception as error:
-
-            print(
-                f"MCP: DEV parsing error "
-                f"for '{query}': {error}"
-            )
-
-    results = list(
-        all_results.values()
-    )
-
-    print(
-        f"MCP: DEV Community collected "
-        f"{len(results)} unique signals."
-    )
-
-    return results
-
-
-# ============================================================
-# SOURCE 5
-# LOBSTERS
-# ============================================================
-
-def search_lobsters() -> list[dict]:
-    """
-    Collect public Lobsters stories from newest and hottest
-    JSON feeds and filter them locally for relevant keywords.
-
-    Lobsters exposes JSON representations of public pages,
-    so this source does not require an authenticated API key.
-    """
-
-    print(
-        "\nMCP: Starting Lobsters collection..."
-    )
-
-    all_results = {}
-
-    urls = [
-        (
-            "newest",
-            LOBSTERS_NEWEST_URL,
-        ),
-        (
-            "hottest",
-            LOBSTERS_HOTTEST_URL,
-        ),
-    ]
-
-    for feed_name, url in urls:
-
-        print(
-            f"MCP: Lobsters -> {feed_name}"
-        )
-
-        response = safe_request(
-            url,
-            timeout=20,
-        )
-
-        if response is None:
-
-            print(
-                f"MCP: Skipping Lobsters "
-                f"{feed_name} feed."
-            )
-
-            continue
-
-        try:
-
-            data = response.json()
-
-            if not isinstance(
-                data,
-                list,
-            ):
-
-                continue
-
-            for item in data:
-
-                story_id = item.get(
-                    "short_id"
-                )
-
-                if not story_id:
-
-                    story_id = item.get(
-                        "short_id_url"
-                    )
-
-                if not story_id:
-
-                    story_id = item.get(
-                        "id"
-                    )
-
-                title = clean_html(
-                    item.get(
-                        "title",
-                        "",
-                    )
-                )
-
-                description = clean_html(
-                    item.get(
-                        "description",
-                        "",
-                    )
-                )
-
-                tags = item.get(
-                    "tags",
-                    [],
-                )
-
-                tag_text = ", ".join(
-                    tags
-                ) if isinstance(
-                    tags,
-                    list,
-                ) else str(tags)
-
-                content_parts = []
-
-                if title:
-
-                    content_parts.append(
-                        f"Title: {title}"
-                    )
-
-                if description:
-
-                    content_parts.append(
-                        f"Description: "
-                        f"{description}"
-                    )
-
-                if tag_text:
-
-                    content_parts.append(
-                        f"Tags: {tag_text}"
-                    )
-
-                content = "\n".join(
-                    content_parts
-                )
-
-                if not contains_relevant_keyword(
-                    content
-                ):
-
-                    continue
-
-                if not story_id:
-
-                    continue
-
-                url_value = item.get(
-                    "url",
-                    "",
-                )
-
-                if not url_value:
-
-                    url_value = (
-                        "https://lobste.rs/s/"
-                        f"{story_id}"
-                    )
-
-                author = item.get(
-                    "submitter_user",
-                    "Unknown",
-                )
-
-                created_at = item.get(
-                    "created_at",
-                    "",
-                )
-
-                signal = normalize_signal(
-                    source="Lobsters",
-                    source_id=str(
-                        story_id
-                    ),
-                    author=author,
-                    content=content,
-                    url=url_value,
-                    created_at=created_at,
-                    search_query=feed_name,
-                )
-
-                if signal:
-
-                    all_results[
-                        str(story_id)
-                    ] = signal
-
-        except Exception as error:
-
-            print(
-                f"MCP: Lobsters parsing error "
-                f"for {feed_name}: {error}"
-            )
-
-    results = list(
-        all_results.values()
-    )
-
-    print(
-        f"MCP: Lobsters collected "
-        f"{len(results)} unique signals."
-    )
-
-    return results
-
-
-# ============================================================
-# MCP TOOL 1
-# MULTI-SOURCE DEMAND COLLECTION
-# ============================================================
-
-@mcp.tool
-def search_demand_signals() -> list[dict]:
-    """
-    Aggregate public demand signals from five sources:
-
-    1. Hacker News
-    2. Stack Overflow
-    3. GitHub
-    4. DEV Community
-    5. Lobsters
-
-    Each source is isolated so that a temporary failure
-    does not stop the rest of the agent.
-    """
-
-    print(
-        "\n"
-        + "=" * 60
-    )
-
-    print(
-        "MCP: MULTI-SOURCE DEMAND COLLECTION"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    all_signals = []
-
-    # --------------------------------------------------------
-    # Source 1
-    # --------------------------------------------------------
-
-    try:
-
-        hn_results = search_hacker_news()
-
-        all_signals.extend(
-            hn_results
-        )
-
-    except Exception as error:
-
-        print(
-            f"MCP: Hacker News source "
-            f"failed: {error}"
-        )
-
-    # --------------------------------------------------------
-    # Source 2
-    # --------------------------------------------------------
-
-    try:
-
-        stack_results = search_stack_exchange()
-
-        all_signals.extend(
-            stack_results
-        )
-
-    except Exception as error:
-
-        print(
-            f"MCP: Stack Overflow source "
-            f"failed: {error}"
-        )
-
-    # --------------------------------------------------------
-    # Source 3
-    # --------------------------------------------------------
-
-    try:
-
-        github_results = search_github()
-
-        all_signals.extend(
-            github_results
-        )
-
-    except Exception as error:
-
-        print(
-            f"MCP: GitHub source "
-            f"failed: {error}"
-        )
-
-    # --------------------------------------------------------
-    # Source 4
-    # --------------------------------------------------------
-
-    try:
-
-        dev_results = search_dev_community()
-
-        all_signals.extend(
-            dev_results
-        )
-
-    except Exception as error:
-
-        print(
-            f"MCP: DEV source "
-            f"failed: {error}"
-        )
-
-    # --------------------------------------------------------
-    # Source 5
-    # --------------------------------------------------------
-
-    try:
-
-        lobsters_results = search_lobsters()
-
-        all_signals.extend(
-            lobsters_results
-        )
-
-    except Exception as error:
-
-        print(
-            f"MCP: Lobsters source "
-            f"failed: {error}"
-        )
-
-    # ========================================================
-    # FINAL DEDUPLICATION
-    # ========================================================
-
-    unique_signals = {}
-
-    for signal in all_signals:
-
-        source = signal.get(
-            "source",
-            "Unknown",
-        )
-
-        source_id = signal.get(
-            "source_id",
-            "",
-        )
-
-        if not source_id:
-
-            continue
-
-        unique_key = (
-            f"{source}:{source_id}"
-        )
-
-        unique_signals[
-            unique_key
-        ] = signal
-
-    results = list(
-        unique_signals.values()
-    )
-
-    # ========================================================
-    # SOURCE SUMMARY
-    # ========================================================
-
-    source_counts = {}
-
-    for signal in results:
-
-        source = signal.get(
-            "source",
-            "Unknown",
-        )
-
-        source_counts[
-            source
-        ] = (
-            source_counts.get(
-                source,
-                0,
-            )
-            + 1
-        )
-
-    print(
-        "\n"
-        + "=" * 60
-    )
-
-    print(
-        "MCP: COLLECTION SUMMARY"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    for source, count in sorted(
-        source_counts.items()
-    ):
-
-        print(
-            f"{source}: {count}"
-        )
-
-    print(
-        f"TOTAL UNIQUE SIGNALS: "
-        f"{len(results)}"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    return results
-
-
-# ============================================================
-# MCP TOOL 2
-# SAVE QUALIFIED LEADS TO GOOGLE SHEETS
+# GOOGLE AUTHENTICATION
 # ============================================================
 
 def get_google_client():
@@ -1431,15 +363,18 @@ def get_google_client():
     )
 
     if not credentials:
-
         raise RuntimeError(
-            "GCP_CREDENTIALS environment "
-            "variable is missing."
+            "GCP_CREDENTIALS environment variable is missing."
         )
 
-    creds_dict = json.loads(
-        credentials
-    )
+    try:
+        creds_dict = json.loads(
+            credentials
+        )
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "GCP_CREDENTIALS is not valid JSON."
+        ) from error
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -1455,6 +390,229 @@ def get_google_client():
         creds
     )
 
+
+# ============================================================
+# MCP TOOL 1
+# SEARCH HACKER NEWS
+# ============================================================
+
+@mcp.tool
+def search_demand_signals() -> list[dict]:
+    """
+    Search Hacker News for potential B2B demand signals
+    related to event ticketing and event platforms.
+
+    The tool performs:
+
+    1. Broad Hacker News discovery.
+    2. Deduplication.
+    3. Deterministic relevance filtering.
+    4. Returns only stronger signals to the AI agent.
+    """
+
+    print(
+        "MCP: Starting Hacker News signal collection..."
+    )
+
+    all_results = {}
+
+    raw_count = 0
+
+    filtered_count = 0
+
+    # --------------------------------------------------------
+    # SEARCH EACH QUERY
+    # --------------------------------------------------------
+
+    for query in SEARCH_QUERIES:
+
+        print(
+            f"MCP: Searching for: {query}"
+        )
+
+        try:
+
+            params = {
+                "query": query,
+                "tags": "comment",
+                "hitsPerPage": RESULTS_PER_QUERY,
+            }
+
+            response = requests.get(
+                HN_SEARCH_URL,
+                params=params,
+                timeout=20,
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            hits = data.get(
+                "hits",
+                [],
+            )
+
+            raw_count += len(hits)
+
+            for item in hits:
+
+                object_id = item.get(
+                    "objectID"
+                )
+
+                if not object_id:
+                    continue
+
+                object_id = str(
+                    object_id
+                )
+
+                comment_text = clean_html(
+                    item.get(
+                        "comment_text",
+                        "",
+                    )
+                )
+
+                if not comment_text:
+                    continue
+
+                # ------------------------------------------------
+                # FILTER IRRELEVANT SIGNALS
+                # ------------------------------------------------
+
+                if not is_relevant_signal(
+                    comment_text
+                ):
+
+                    filtered_count += 1
+
+                    continue
+
+                all_results[
+                    object_id
+                ] = {
+                    "source": "Hacker News",
+                    "source_id": object_id,
+                    "author": item.get(
+                        "author",
+                        "Unknown",
+                    ),
+                    "content": comment_text[
+                        :MAX_CONTENT_LENGTH
+                    ],
+                    "url": (
+                        "https://news.ycombinator.com/"
+                        f"item?id={object_id}"
+                    ),
+                    "created_at": item.get(
+                        "created_at",
+                        "",
+                    ),
+                    "search_query": query,
+                    "relevance_score": relevance_score(
+                        comment_text
+                    ),
+                }
+
+        except requests.RequestException as error:
+
+            print(
+                "MCP: Hacker News request failed "
+                f"for '{query}': {error}"
+            )
+
+        except Exception as error:
+
+            print(
+                "MCP: Unexpected error for "
+                f"'{query}': {error}"
+            )
+
+    results = list(
+        all_results.values()
+    )
+
+    # --------------------------------------------------------
+    # SORT BY RELEVANCE
+    # --------------------------------------------------------
+
+    results.sort(
+        key=lambda item: item.get(
+            "relevance_score",
+            0,
+        ),
+        reverse=True,
+    )
+
+    print(
+        "MCP: Raw Hacker News results: "
+        f"{raw_count}"
+    )
+
+    print(
+        "MCP: Removed irrelevant signals: "
+        f"{filtered_count}"
+    )
+
+    print(
+        "MCP: Final unique relevant signals: "
+        f"{len(results)}"
+    )
+
+    # --------------------------------------------------------
+    # SAMPLE SIGNALS
+    # --------------------------------------------------------
+
+    if results:
+
+        print(
+            "\n========== TOP RELEVANT SIGNALS =========="
+        )
+
+        for index, signal in enumerate(
+            results[:5],
+            start=1,
+        ):
+
+            print(
+                f"\n--- Signal {index} ---"
+            )
+
+            print(
+                f"Source: {signal.get('source')}"
+            )
+
+            print(
+                f"Author: {signal.get('author')}"
+            )
+
+            print(
+                f"Relevance: "
+                f"{signal.get('relevance_score')}"
+            )
+
+            print(
+                f"URL: {signal.get('url')}"
+            )
+
+            print(
+                f"Content: "
+                f"{signal.get('content', '')[:500]}"
+            )
+
+        print(
+            "\n===========================================\n"
+        )
+
+    return results
+
+
+# ============================================================
+# MCP TOOL 2
+# SAVE QUALIFIED LEADS TO GOOGLE SHEETS
+# ============================================================
 
 @mcp.tool
 def save_qualified_leads(
@@ -1489,8 +647,7 @@ def save_qualified_leads(
         if not sheet_id:
 
             raise RuntimeError(
-                "SHEET_ID environment "
-                "variable is missing."
+                "SHEET_ID environment variable is missing."
             )
 
         gc = get_google_client()
@@ -1500,7 +657,7 @@ def save_qualified_leads(
         )
 
         # ----------------------------------------------------
-        # Get or create worksheet
+        # GET OR CREATE WORKSHEET
         # ----------------------------------------------------
 
         try:
@@ -1516,6 +673,10 @@ def save_qualified_leads(
                 rows=1000,
                 cols=20,
             )
+
+        # ----------------------------------------------------
+        # HEADERS
+        # ----------------------------------------------------
 
         headers = [
             "Detected At",
@@ -1541,7 +702,7 @@ def save_qualified_leads(
         )
 
         # ----------------------------------------------------
-        # Header
+        # CREATE HEADER
         # ----------------------------------------------------
 
         if not existing_values:
@@ -1558,18 +719,15 @@ def save_qualified_leads(
 
             for row in existing_values[1:]:
 
-                if (
-                    len(row) > 2
-                    and row[2]
-                ):
+                if len(row) > 2 and row[2]:
 
                     existing_source_ids.add(
-                        str(
-                            row[1]
-                            + ":"
-                            + row[2]
-                        )
+                        str(row[2]).strip()
                     )
+
+        # ----------------------------------------------------
+        # PREPARE ROWS
+        # ----------------------------------------------------
 
         rows_to_add = []
 
@@ -1581,18 +739,7 @@ def save_qualified_leads(
             "%Y-%m-%d %H:%M:%S UTC"
         )
 
-        # ----------------------------------------------------
-        # Deduplicate and prepare rows
-        # ----------------------------------------------------
-
         for lead in leads:
-
-            source = str(
-                lead.get(
-                    "source",
-                    "Unknown",
-                )
-            ).strip()
 
             source_id = str(
                 lead.get(
@@ -1605,14 +752,7 @@ def save_qualified_leads(
 
                 continue
 
-            duplicate_key = (
-                f"{source}:{source_id}"
-            )
-
-            if (
-                duplicate_key
-                in existing_source_ids
-            ):
+            if source_id in existing_source_ids:
 
                 duplicates += 1
 
@@ -1621,7 +761,10 @@ def save_qualified_leads(
             rows_to_add.append([
                 detected_at,
 
-                source,
+                lead.get(
+                    "source",
+                    "Hacker News",
+                ),
 
                 source_id,
 
@@ -1694,11 +837,11 @@ def save_qualified_leads(
             ])
 
             existing_source_ids.add(
-                duplicate_key
+                source_id
             )
 
         # ----------------------------------------------------
-        # Write
+        # WRITE ROWS
         # ----------------------------------------------------
 
         if rows_to_add:
@@ -1720,16 +863,14 @@ def save_qualified_leads(
 
         return {
             "success": True,
-            "added": len(
-                rows_to_add
-            ),
+            "added": len(rows_to_add),
             "duplicates": duplicates,
         }
 
     except Exception as error:
 
         print(
-            f"MCP: Google Sheets error: "
+            "MCP: Google Sheets error: "
             f"{error}"
         )
 
@@ -1756,7 +897,8 @@ def log_agent_run(
     error: str = "",
 ) -> bool:
     """
-    Log every autonomous agent execution into Run Log.
+    Log every autonomous agent execution
+    into the Run Log worksheet.
     """
 
     try:
@@ -1768,8 +910,7 @@ def log_agent_run(
         if not sheet_id:
 
             raise RuntimeError(
-                "SHEET_ID environment "
-                "variable is missing."
+                "SHEET_ID environment variable is missing."
             )
 
         gc = get_google_client()
@@ -1779,7 +920,7 @@ def log_agent_run(
         )
 
         # ----------------------------------------------------
-        # Get or create Run Log
+        # GET OR CREATE RUN LOG
         # ----------------------------------------------------
 
         try:
@@ -1797,7 +938,7 @@ def log_agent_run(
             )
 
         # ----------------------------------------------------
-        # Headers
+        # CREATE HEADER
         # ----------------------------------------------------
 
         if not worksheet.get_all_values():
@@ -1813,7 +954,7 @@ def log_agent_run(
             ])
 
         # ----------------------------------------------------
-        # Add run
+        # WRITE LOG
         # ----------------------------------------------------
 
         worksheet.append_row([
@@ -1841,7 +982,9 @@ def log_agent_run(
 
             status,
 
-            error[:500],
+            str(
+                error
+            )[:500],
         ])
 
         print(
@@ -1853,7 +996,7 @@ def log_agent_run(
     except Exception as error:
 
         print(
-            f"MCP: Could not log run: "
+            "MCP: Could not log run: "
             f"{error}"
         )
 
@@ -1867,8 +1010,9 @@ def log_agent_run(
 if __name__ == "__main__":
 
     print(
-        "Starting Ticmint Custom "
-        "MCP Server..."
+        "Starting Ticmint Custom MCP Server..."
     )
 
     mcp.run()
+
+
