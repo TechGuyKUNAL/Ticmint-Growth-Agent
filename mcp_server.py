@@ -19,15 +19,13 @@ mcp = FastMCP("TicmintDemandCapture")
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 
 SEARCH_QUERIES = [
-    '"Eventbrite" fees',
-    '"Eventbrite" expensive',
-    '"Eventbrite" alternative',
-    '"Eventbrite" branding',
-    '"Eventbrite" API',
-    '"Eventbrite" support',
-    '"ticketing platform" alternative',
-    '"ticketing platform" problem',
-    '"ticketing platform" event',
+    "Eventbrite",
+    "ticketing",
+    "ticket tickets",
+    "event tickets",
+    "event registration",
+    "conference tickets",
+    "event platform",
 ]
 
 
