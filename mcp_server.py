@@ -96,11 +96,10 @@ def search_demand_signals() -> list[dict]:
     for query in SEARCH_QUERIES:
         try:
             params = {
-                "query": query,
-                "tags": "comment",
-                "hitsPerPage": 20,
-                "numericFilters": f"created_at_i>{cutoff_timestamp}",
-            }
+    "query": query,
+    "tags": "comment",
+    "hitsPerPage": 20,
+}
 
             response = requests.get(
                 HN_SEARCH_URL,
