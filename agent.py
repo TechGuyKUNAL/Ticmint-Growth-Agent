@@ -354,10 +354,23 @@ async def main():
 
             signals = search_result.data or []
 
-            print(
-                f"MCP returned "
-                f"{len(signals)} signals."
-            )
+print(
+    f"MCP returned "
+    f"{len(signals)} signals."
+)
+
+print("\n========== SAMPLE SIGNALS ==========")
+
+for signal in signals[:10]:
+    print(
+        json.dumps(
+            signal,
+            indent=2,
+            ensure_ascii=False
+        )
+    )
+
+print("========== END SAMPLE ==========\n")
 
             # =================================================
             # NO DATA
