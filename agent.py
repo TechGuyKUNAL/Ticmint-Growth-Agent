@@ -212,14 +212,13 @@ PUBLIC CONVERSATIONS:
 )}
 """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.2,
-        ),
-    )
+   response = client.models.generate_content(
+    model=GEMINI_MODEL,
+    contents=prompt,
+    config=types.GenerateContentConfig(
+        response_mime_type="application/json",
+    ),
+)
 
     text = response.text.strip()
 
