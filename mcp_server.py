@@ -1,7 +1,7 @@
 import os
 import json
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import requests
 import gspread
@@ -9,39 +9,44 @@ from google.oauth2.service_account import Credentials
 from fastmcp import FastMCP
 
 
+# ============================================================
+# TICMINT CUSTOM MCP SERVER
+# ============================================================
+
 mcp = FastMCP("TicmintDemandCapture")
 
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
 
 SEARCH_QUERIES = [
     "Eventbrite",
     "ticketing",
-    "ticket tickets",
     "event tickets",
     "event registration",
     "conference tickets",
     "event platform",
+    "ticketing platform",
 ]
 
 
-# ---------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
 def clean_html(raw_html: str) -> str:
-    """Remove HTML tags from Hacker News comments."""
+    """Remove HTML tags and basic HTML entities."""
+
     if not raw_html:
         return ""
 
     cleanr = re.compile(r"<.*?>")
+
     text = re.sub(cleanr, "", raw_html)
 
-    # Basic HTML entity cleanup
     text = (
         text.replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -54,11 +59,14 @@ def clean_html(raw_html: str) -> str:
 
 
 def get_google_client():
-    """Create an authenticated Google Sheets client."""
+    """Authenticate with Google using the service account."""
+
     credentials = os.environ.get("GCP_CREDENTIALS")
 
     if not credentials:
-        raise RuntimeError("GCP_CREDENTIALS environment variable is missing.")
+        raise RuntimeError(
+            "GCP_CREDENTIALS environment variable is missing."
+        )
 
     creds_dict = json.loads(credentials)
 
@@ -75,31 +83,35 @@ def get_google_client():
     return gspread.authorize(creds)
 
 
-# ---------------------------------------------------------
-# MCP TOOL 1: Search public demand signals
-# ---------------------------------------------------------
+# ============================================================
+# MCP TOOL 1
+# SEARCH HACKER NEWS
+# ============================================================
 
 @mcp.tool
 def search_demand_signals() -> list[dict]:
     """
-    Searches publicly available Hacker News discussions for
-    event-ticketing demand and pain signals.
+    Search Hacker News for public conversations related to
+    event ticketing, event platforms and Eventbrite.
 
-    Returns normalized conversation records.
+    This is the custom MCP data acquisition tool.
     """
 
-    print("MCP: Searching Hacker News demand signals...")
+    print("MCP: Starting Hacker News signal collection...")
 
     all_results = {}
-    "numericFilters": f"created_at_i>{cutoff_timestamp}",
 
     for query in SEARCH_QUERIES:
+
+        print(f"MCP: Searching for: {query}")
+
         try:
+
             params = {
-    "query": query,
-    "tags": "comment",
-    "hitsPerPage": 20,
-}
+                "query": query,
+                "tags": "comment",
+                "hitsPerPage": 20,
+            }
 
             response = requests.get(
                 HN_SEARCH_URL,
@@ -112,6 +124,7 @@ def search_demand_signals() -> list[dict]:
             data = response.json()
 
             for item in data.get("hits", []):
+
                 object_id = item.get("objectID")
 
                 if not object_id:
@@ -124,56 +137,65 @@ def search_demand_signals() -> list[dict]:
                 if not comment_text:
                     continue
 
-                # Deduplicate by Hacker News object ID
-                all_results[object_id] = {
+                all_results[str(object_id)] = {
                     "source": "Hacker News",
                     "source_id": str(object_id),
-                    "author": item.get("author") or "Unknown",
+                    "author": item.get(
+                        "author",
+                        "Unknown",
+                    ),
                     "content": comment_text[:1000],
                     "url": (
                         "https://news.ycombinator.com/"
                         f"item?id={object_id}"
                     ),
-                    "created_at": item.get("created_at", ""),
+                    "created_at": item.get(
+                        "created_at",
+                        "",
+                    ),
                     "search_query": query,
                 }
 
-        except requests.RequestException as exc:
+        except requests.RequestException as error:
+
             print(
-                f"MCP: Hacker News request failed for "
-                f"'{query}': {exc}"
+                f"MCP: Hacker News request failed "
+                f"for '{query}': {error}"
             )
 
-        except Exception as exc:
+        except Exception as error:
+
             print(
                 f"MCP: Unexpected error for "
-                f"'{query}': {exc}"
+                f"'{query}': {error}"
             )
 
     results = list(all_results.values())
 
     print(
-        f"MCP: Found {len(results)} unique public "
-        f"conversation signals."
+        f"MCP: Collection complete. "
+        f"Found {len(results)} unique signals."
     )
 
     return results
 
 
-# ---------------------------------------------------------
-# MCP TOOL 2: Save qualified leads
-# ---------------------------------------------------------
+# ============================================================
+# MCP TOOL 2
+# SAVE QUALIFIED LEADS TO GOOGLE SHEETS
+# ============================================================
 
 @mcp.tool
 def save_qualified_leads(leads: list[dict]) -> dict:
     """
-    Saves qualified demand signals to Google Sheets.
+    Save qualified opportunities into Google Sheets.
 
-    Automatically creates the required sheets and prevents
-    duplicate source IDs from being inserted.
+    Automatically creates the Qualified Leads worksheet
+    and prevents duplicate Hacker News source IDs.
     """
 
     if not leads:
+
         return {
             "success": True,
             "added": 0,
@@ -181,28 +203,37 @@ def save_qualified_leads(leads: list[dict]) -> dict:
         }
 
     print(
-        f"MCP: Saving {len(leads)} qualified opportunities..."
+        f"MCP: Preparing to save "
+        f"{len(leads)} qualified leads."
     )
 
     try:
+
         sheet_id = os.environ.get("SHEET_ID")
 
         if not sheet_id:
+
             raise RuntimeError(
                 "SHEET_ID environment variable is missing."
             )
 
         gc = get_google_client()
+
         spreadsheet = gc.open_by_key(sheet_id)
 
-        # -------------------------------------------------
-        # Leads worksheet
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Get or create Qualified Leads sheet
+        # ----------------------------------------------------
 
         try:
-            leads_sheet = spreadsheet.worksheet("Qualified Leads")
+
+            worksheet = spreadsheet.worksheet(
+                "Qualified Leads"
+            )
+
         except gspread.WorksheetNotFound:
-            leads_sheet = spreadsheet.add_worksheet(
+
+            worksheet = spreadsheet.add_worksheet(
                 title="Qualified Leads",
                 rows=1000,
                 cols=20,
@@ -227,67 +258,145 @@ def save_qualified_leads(leads: list[dict]) -> dict:
             "Outreach Draft",
         ]
 
-        existing_values = leads_sheet.get_all_values()
+        existing_values = worksheet.get_all_values()
+
+        # ----------------------------------------------------
+        # Create header if sheet is empty
+        # ----------------------------------------------------
 
         if not existing_values:
-            leads_sheet.append_row(headers)
+
+            worksheet.append_row(headers)
+
             existing_source_ids = set()
+
         else:
-            existing_source_ids = {
-                row[2]
-                for row in existing_values[1:]
-                if len(row) > 2 and row[2]
-            }
+
+            existing_source_ids = set()
+
+            for row in existing_values[1:]:
+
+                if len(row) > 2 and row[2]:
+
+                    existing_source_ids.add(
+                        str(row[2])
+                    )
 
         rows_to_add = []
+
         duplicates = 0
 
         detected_at = datetime.now(
             timezone.utc
-        ).strftime("%Y-%m-%d %H:%M:%S UTC")
+        ).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+
+        # ----------------------------------------------------
+        # Deduplicate
+        # ----------------------------------------------------
 
         for lead in leads:
+
             source_id = str(
-                lead.get("source_id", "")
+                lead.get(
+                    "source_id",
+                    "",
+                )
             ).strip()
 
             if not source_id:
+
                 continue
 
             if source_id in existing_source_ids:
+
                 duplicates += 1
+
                 continue
 
             rows_to_add.append([
                 detected_at,
-                lead.get("source", "Hacker News"),
+                lead.get(
+                    "source",
+                    "Hacker News",
+                ),
                 source_id,
-                lead.get("author", ""),
-                lead.get("url", ""),
-                lead.get("current_platform", ""),
-                lead.get("event_type", ""),
-                lead.get("event_scale", ""),
-                lead.get("pain_category", ""),
-                lead.get("pain_point", ""),
-                lead.get("urgency", ""),
-                lead.get("switching_intent", ""),
-                lead.get("ticmint_fit", ""),
-                str(lead.get("opportunity_score", "")),
-                lead.get("why_this_lead", ""),
-                lead.get("outreach_draft", ""),
+                lead.get(
+                    "author",
+                    "",
+                ),
+                lead.get(
+                    "url",
+                    "",
+                ),
+                lead.get(
+                    "current_platform",
+                    "Unknown",
+                ),
+                lead.get(
+                    "event_type",
+                    "Unknown",
+                ),
+                lead.get(
+                    "event_scale",
+                    "Unknown",
+                ),
+                lead.get(
+                    "pain_category",
+                    "Unknown",
+                ),
+                lead.get(
+                    "pain_point",
+                    "",
+                ),
+                lead.get(
+                    "urgency",
+                    "Unknown",
+                ),
+                lead.get(
+                    "switching_intent",
+                    "Unknown",
+                ),
+                lead.get(
+                    "ticmint_fit",
+                    "Unknown",
+                ),
+                str(
+                    lead.get(
+                        "opportunity_score",
+                        "",
+                    )
+                ),
+                lead.get(
+                    "why_this_lead",
+                    "",
+                ),
+                lead.get(
+                    "outreach_draft",
+                    "",
+                ),
             ])
 
             existing_source_ids.add(source_id)
 
+        # ----------------------------------------------------
+        # Write new rows
+        # ----------------------------------------------------
+
         if rows_to_add:
-            leads_sheet.append_rows(
+
+            worksheet.append_rows(
                 rows_to_add,
                 value_input_option="USER_ENTERED",
             )
 
         print(
-            f"MCP: Added {len(rows_to_add)} leads. "
-            f"Skipped {duplicates} duplicates."
+            f"MCP: Added {len(rows_to_add)} leads."
+        )
+
+        print(
+            f"MCP: Skipped {duplicates} duplicates."
         )
 
         return {
@@ -296,89 +405,127 @@ def save_qualified_leads(leads: list[dict]) -> dict:
             "duplicates": duplicates,
         }
 
-    except Exception as exc:
-        print(f"MCP: Google Sheets error: {exc}")
+    except Exception as error:
+
+        print(
+            f"MCP: Google Sheets error: {error}"
+        )
 
         return {
             "success": False,
             "added": 0,
             "duplicates": 0,
-            "error": str(exc),
+            "error": str(error),
         }
 
 
-# ---------------------------------------------------------
-# MCP TOOL 3: Log every agent run
-# ---------------------------------------------------------
+# ============================================================
+# MCP TOOL 3
+# LOG EVERY RUN
+# ============================================================
 
 @mcp.tool
 def log_agent_run(
     signals_found: int,
-    new_signals: int,
     qualified_leads: int,
+    leads_added: int,
     duplicates: int,
     status: str,
     error: str = "",
 ) -> bool:
     """
-    Logs every autonomous agent run to Google Sheets.
+    Log every autonomous agent execution into a Run Log sheet.
     """
 
     try:
+
         sheet_id = os.environ.get("SHEET_ID")
 
         if not sheet_id:
+
             raise RuntimeError(
                 "SHEET_ID environment variable is missing."
             )
 
         gc = get_google_client()
+
         spreadsheet = gc.open_by_key(sheet_id)
 
+        # ----------------------------------------------------
+        # Get or create Run Log sheet
+        # ----------------------------------------------------
+
         try:
-            run_sheet = spreadsheet.worksheet("Run Log")
+
+            worksheet = spreadsheet.worksheet(
+                "Run Log"
+            )
+
         except gspread.WorksheetNotFound:
-            run_sheet = spreadsheet.add_worksheet(
+
+            worksheet = spreadsheet.add_worksheet(
                 title="Run Log",
                 rows=1000,
                 cols=10,
             )
 
-        existing = run_sheet.get_all_values()
+        # ----------------------------------------------------
+        # Create headers
+        # ----------------------------------------------------
 
-        if not existing:
-            run_sheet.append_row([
+        if not worksheet.get_all_values():
+
+            worksheet.append_row([
                 "Run Time",
                 "Signals Found",
-                "New Signals",
                 "Qualified Leads",
+                "Leads Added",
                 "Duplicates",
                 "Status",
                 "Error",
             ])
 
-        run_sheet.append_row([
-            datetime.now(timezone.utc).strftime(
+        # ----------------------------------------------------
+        # Add run
+        # ----------------------------------------------------
+
+        worksheet.append_row([
+            datetime.now(
+                timezone.utc
+            ).strftime(
                 "%Y-%m-%d %H:%M:%S UTC"
             ),
             str(signals_found),
-            str(new_signals),
             str(qualified_leads),
+            str(leads_added),
             str(duplicates),
             status,
             error[:500],
         ])
 
+        print(
+            "MCP: Run successfully logged."
+        )
+
         return True
 
-    except Exception as exc:
-        print(f"MCP: Failed to log run: {exc}")
+    except Exception as error:
+
+        print(
+            f"MCP: Could not log run: {error}"
+        )
+
         return False
 
 
-# ---------------------------------------------------------
-# Run MCP server directly
-# ---------------------------------------------------------
+# ============================================================
+# START MCP SERVER
+# ============================================================
 
 if __name__ == "__main__":
+
+    print(
+        "Starting Ticmint Custom MCP Server..."
+    )
+
     mcp.run()
