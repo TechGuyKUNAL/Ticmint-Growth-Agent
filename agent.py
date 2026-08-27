@@ -25,12 +25,9 @@ GEMINI_MODEL = os.environ.get(
 
 def get_gemini_client():
 
-    api_key = os.environ.get(
-        "GEMINI_API_KEY"
-    )
+    api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
-
         raise RuntimeError(
             "GEMINI_API_KEY environment variable is missing."
         )
@@ -44,9 +41,7 @@ def get_gemini_client():
 # AI QUALIFICATION
 # ============================================================
 
-def analyse_signals(
-    signals: list[dict],
-) -> list[dict]:
+def analyse_signals(signals: list[dict]) -> list[dict]:
 
     if not signals:
         return []
@@ -58,29 +53,29 @@ You are a B2B Growth Lead working for Ticmint.
 
 TICMINT CONTEXT
 
-Ticmint is a white-label event ticketing and event management
-platform.
+Ticmint is a white-label event ticketing and event
+management platform.
 
-It helps event organisers operate ticketing using their own
-brand, domain and checkout while retaining control over
-attendee data.
+It helps event organisers operate ticketing using their
+own brand, domain and checkout while retaining control
+over attendee data.
 
-Your job is to identify genuine potential sales opportunities
-from public online conversations.
+Your job is to identify genuine potential sales
+opportunities from public online conversations.
 
 Do NOT simply find negative comments.
 
 A qualified opportunity should have evidence of:
 
-1. The person is likely to be an event organiser, event
-   operator, conference organiser, community organiser, festival
-   organiser, business running events, or someone directly
-   involved in organising events.
+1. The person is likely an event organiser, event operator,
+conference organiser, community organiser, festival organiser,
+business running events, or someone directly involved in
+organising events.
 
 AND
 
 2. They are discussing ticketing, event registration,
-   Eventbrite, ticketing software, or a similar platform.
+Eventbrite, ticketing software, or a similar platform.
 
 AND
 
@@ -119,8 +114,8 @@ Never invent facts.
 
 If something is unknown, write "Unknown".
 
-Do not assume event size, event type, company name, platform
-or urgency unless there is evidence.
+Do not assume event size, event type, company name,
+platform or urgency unless there is evidence.
 
 OPPORTUNITY SCORING
 
@@ -167,8 +162,8 @@ OUTREACH
 
 Write a short personalised outreach message.
 
-The message must refer to the specific problem identified
-in the conversation.
+The message must refer to the specific problem
+identified in the conversation.
 
 Do NOT use generic statements such as:
 
@@ -212,98 +207,64 @@ PUBLIC CONVERSATIONS:
 )}
 """
 
-    # ========================================================
-    # GEMINI REQUEST
-    # ========================================================
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-        ),
-    )
-
-    # ========================================================
-    # READ GEMINI RESPONSE
-    # ========================================================
-
-    if not response.text:
-
-        print(
-            "Gemini returned an empty response."
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+            ),
         )
 
-        return []
+        text = response.text.strip()
 
-    text = response.text.strip()
-
-    # ========================================================
-    # PARSE JSON
-    # ========================================================
-
-    try:
+        if not text:
+            print("Gemini returned an empty response.")
+            return []
 
         result = json.loads(text)
 
-    except json.JSONDecodeError:
+        if not isinstance(result, list):
+            print("Gemini response was not a JSON array.")
+            return []
 
-        print(
-            "Gemini returned invalid JSON."
-        )
+        qualified = []
 
-        print(
-            text[:3000]
-        )
+        for lead in result:
 
-        return []
+            if not isinstance(lead, dict):
+                continue
 
-    # ========================================================
-    # VERIFY JSON STRUCTURE
-    # ========================================================
-
-    if not isinstance(result, list):
-
-        print(
-            "Gemini response was not a JSON array."
-        )
-
-        return []
-
-    # ========================================================
-    # FINAL SAFETY FILTER
-    # ========================================================
-
-    qualified = []
-
-    for lead in result:
-
-        if not isinstance(lead, dict):
-
-            continue
-
-        score = lead.get(
-            "opportunity_score",
-            0,
-        )
-
-        try:
-
-            score = int(score)
-
-        except (TypeError, ValueError):
-
-            score = 0
-
-        if score >= 60:
-
-            lead["opportunity_score"] = score
-
-            qualified.append(
-                lead
+            score = lead.get(
+                "opportunity_score",
+                0
             )
 
-    return qualified
+            try:
+                score = int(score)
+            except (TypeError, ValueError):
+                score = 0
+
+            if score >= 60:
+                lead["opportunity_score"] = score
+                qualified.append(lead)
+
+        return qualified
+
+    except json.JSONDecodeError:
+
+        print("Gemini returned invalid JSON.")
+        print(text[:3000])
+
+        return []
+
+    except Exception as error:
+
+        print("Gemini analysis failed:")
+        print(str(error))
+
+        raise
 
 
 # ============================================================
@@ -313,15 +274,10 @@ PUBLIC CONVERSATIONS:
 async def main():
 
     print("=" * 60)
-
-    print(
-        "TICMINT AUTONOMOUS DEMAND CAPTURE AGENT"
-    )
-
+    print("TICMINT AUTONOMOUS DEMAND CAPTURE AGENT")
     print("=" * 60)
 
     signals = []
-
     qualified_leads = []
 
     try:
@@ -354,23 +310,31 @@ async def main():
 
             signals = search_result.data or []
 
-print(
-    f"MCP returned "
-    f"{len(signals)} signals."
-)
+            print(
+                f"MCP returned {len(signals)} signals."
+            )
 
-print("\n========== SAMPLE SIGNALS ==========")
+            # =================================================
+            # DEBUG SAMPLE
+            # =================================================
 
-for signal in signals[:10]:
-    print(
-        json.dumps(
-            signal,
-            indent=2,
-            ensure_ascii=False
-        )
-    )
+            print(
+                "\n========== SAMPLE SIGNALS =========="
+            )
 
-print("========== END SAMPLE ==========\n")
+            for signal in signals[:5]:
+
+                print(
+                    json.dumps(
+                        signal,
+                        indent=2,
+                        ensure_ascii=False
+                    )
+                )
+
+            print(
+                "========== END SAMPLE ==========\n"
+            )
 
             # =================================================
             # NO DATA
@@ -422,6 +386,9 @@ print("========== END SAMPLE ==========\n")
                 "\n[4/4] Saving results via MCP..."
             )
 
+            leads_added = 0
+            duplicates = 0
+
             if qualified_leads:
 
                 save_result = await client.call_tool(
@@ -437,12 +404,12 @@ print("========== END SAMPLE ==========\n")
 
                 leads_added = save_data.get(
                     "added",
-                    0,
+                    0
                 )
 
                 duplicates = save_data.get(
                     "duplicates",
-                    0,
+                    0
                 )
 
                 print(
@@ -454,10 +421,6 @@ print("========== END SAMPLE ==========\n")
                 )
 
             else:
-
-                leads_added = 0
-
-                duplicates = 0
 
                 print(
                     "No high-intent opportunities "
@@ -472,9 +435,7 @@ print("========== END SAMPLE ==========\n")
                 "log_agent_run",
                 {
                     "signals_found": len(signals),
-                    "qualified_leads": len(
-                        qualified_leads
-                    ),
+                    "qualified_leads": len(qualified_leads),
                     "leads_added": leads_added,
                     "duplicates": duplicates,
                     "status": "SUCCESS",
@@ -488,17 +449,12 @@ print("========== END SAMPLE ==========\n")
 
     except Exception as error:
 
-        print(
-            "\nAGENT ERROR:"
-        )
+        print("\nAGENT ERROR:")
+        print(str(error))
 
-        print(
-            str(error)
-        )
-
-        # ====================================================
+        # ----------------------------------------------------
         # TRY TO LOG FAILURE
-        # ====================================================
+        # ----------------------------------------------------
 
         try:
 
@@ -507,9 +463,7 @@ print("========== END SAMPLE ==========\n")
                 await client.call_tool(
                     "log_agent_run",
                     {
-                        "signals_found": len(
-                            signals
-                        ),
+                        "signals_found": len(signals),
                         "qualified_leads": 0,
                         "leads_added": 0,
                         "duplicates": 0,
@@ -521,8 +475,11 @@ print("========== END SAMPLE ==========\n")
         except Exception as log_error:
 
             print(
-                f"Could not log failure: "
-                f"{log_error}"
+                "Could not log failure:"
+            )
+
+            print(
+                str(log_error)
             )
 
         raise
@@ -534,6 +491,4 @@ print("========== END SAMPLE ==========\n")
 
 if __name__ == "__main__":
 
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())
