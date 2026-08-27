@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import time
 
 from google import genai
 from google.genai import types
@@ -9,222 +8,118 @@ from fastmcp import Client
 
 from mcp_server import mcp
 
+
 # ============================================================
-
 # CONFIGURATION
-
 # ============================================================
 
 GEMINI_MODEL = os.environ.get(
-"GEMINI_MODEL",
-"gemini-3.6-flash",
+    "GEMINI_MODEL",
+    "gemini-3.6-flash",
 )
 
-MAX_GEMINI_RETRIES = 4
-INITIAL_RETRY_DELAY = 10
 
 # ============================================================
-
 # GEMINI CLIENT
-
 # ============================================================
 
 def get_gemini_client():
-"""
-Create and return the Gemini client using the
-GEMINI_API_KEY GitHub secret.
-"""
 
-```
-api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
 
-if not api_key:
-    raise RuntimeError(
-        "GEMINI_API_KEY environment variable is missing."
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY environment variable is missing."
+        )
+
+    return genai.Client(
+        api_key=api_key
     )
 
-return genai.Client(
-    api_key=api_key
-)
-```
 
 # ============================================================
-
-# GEMINI ANALYSIS
-
+# AI QUALIFICATION
 # ============================================================
 
-def analyse_signals(
-signals: list[dict],
-) -> list[dict]:
-"""
-Analyse collected public internet conversations and
-identify genuine Ticmint sales opportunities.
+def analyse_signals(signals: list[dict]) -> list[dict]:
 
-```
-Gemini 503 errors are retried automatically.
-"""
+    if not signals:
+        return []
 
-if not signals:
-    return []
+    client = get_gemini_client()
 
-client = get_gemini_client()
-
-prompt = f"""
-```
-
+    prompt = f"""
 You are a B2B Growth Lead working for Ticmint.
 
-Your job is to identify genuine potential sales opportunities
-from public online conversations collected from multiple
-internet sources.
-
-============================================================
 TICMINT CONTEXT
-===============
 
-Ticmint is a white-label event ticketing and event management
-platform.
+Ticmint is a white-label event ticketing and event
+management platform.
 
-It helps event organisers operate ticketing using their own
-brand, domain and checkout while retaining control over
-attendee data.
+It helps event organisers operate ticketing using their
+own brand, domain and checkout while retaining control
+over attendee data.
 
-Ticmint serves event organisers, businesses, communities,
-conference organisers, festivals and other event operators.
+Your job is to identify genuine potential sales
+opportunities from public online conversations.
 
-The goal of this agent is NOT to find every mention of
-ticketing.
+Do NOT simply find negative comments.
 
-The goal is to find conversations where there is a credible
-commercial opportunity for Ticmint.
+A qualified opportunity should have evidence of:
 
-============================================================
-QUALIFICATION LOGIC
-===================
-
-A conversation should generally qualify only when there is
-evidence for BOTH:
-
-1. ORGANISER / BUSINESS CONTEXT
-
-The person appears to be:
-
-* An event organiser
-* Event operator
-* Conference organiser
-* Festival organiser
-* Community organiser
-* Business running events
-* Event technology decision maker
-* Someone directly involved in organising or operating events
+1. The person is likely an event organiser, event operator,
+conference organiser, community organiser, festival organiser,
+business running events, or someone directly involved in
+organising events.
 
 AND
 
-2. TICKETING / EVENT PLATFORM CONTEXT
+2. They are discussing ticketing, event registration,
+Eventbrite, ticketing software, or a similar platform.
 
-They are discussing:
+AND
 
-* Eventbrite
-* Ticketmaster
-* Tito
-* Eventzilla
-* Universe
-* Humanitix
-* Event ticketing
-* Event registration
-* Ticketing software
-* Event management software
-* Event platforms
-* Checkout
-* Attendee management
-* Event registration systems
+3. There is a meaningful business pain or buying signal.
 
-AND preferably there is a meaningful business signal.
+Examples:
 
-============================================================
-BUYING SIGNALS
-==============
+- High ticketing fees
+- Poor branding
+- Lack of white-label experience
+- Poor checkout experience
+- API limitations
+- Integration problems
+- Poor customer support
+- Data ownership concerns
+- Payout problems
+- Attendee management limitations
+- Looking for an Eventbrite alternative
+- Considering switching platforms
+- Building a large event and evaluating platforms
 
-Strong buying signals include:
+DO NOT QUALIFY:
 
-* High ticketing fees
-* Transaction fees
-* Poor branding
-* Lack of white-label experience
-* Poor checkout experience
-* Poor user experience
-* Platform limitations
-* API limitations
-* Integration problems
-* Poor customer support
-* Data ownership concerns
-* Attendee data limitations
-* Payout problems
-* Reporting limitations
-* Event management limitations
-* Looking for an alternative
-* Considering switching platforms
-* Evaluating multiple platforms
-* Building a large event
-* Planning an upcoming event
-* Frustration with an existing provider
-* Need for branded ticketing
-* Need for own domain
-* Need for control over attendee data
+- People buying tickets.
+- Casual Eventbrite mentions.
+- News about Eventbrite.
+- Investors discussing Eventbrite.
+- Developers discussing ticketing APIs without an event use case.
+- Generic technology discussions.
+- Complaints without evidence of an organiser/business context.
+- Conversations where there is clearly no commercial opportunity.
 
-============================================================
-DO NOT QUALIFY
-==============
-
-Do NOT qualify:
-
-* People simply buying tickets
-* Casual mentions of Eventbrite
-* News articles or news discussions
-* Investors discussing Eventbrite
-* Generic software discussions
-* Developers discussing APIs without an event use case
-* People asking how to attend an event
-* Generic complaints without organiser/business context
-* Academic discussions
-* Historical discussions with no commercial intent
-* Conversations where there is clearly no sales opportunity
-
-============================================================
-IMPORTANT EVIDENCE RULE
-=======================
+IMPORTANT:
 
 Never invent facts.
 
-Only use information contained in the supplied conversation.
+If something is unknown, write "Unknown".
 
-If something is unknown, write:
+Do not assume event size, event type, company name,
+platform or urgency unless there is evidence.
 
-"Unknown"
-
-Do NOT assume:
-
-* Event size
-* Event type
-* Company name
-* Budget
-* Location
-* Platform
-* Urgency
-* Job title
-* Buying authority
-* Switching timeline
-
-unless there is evidence.
-
-============================================================
 OPPORTUNITY SCORING
-===================
 
-Score every potential opportunity from 0 to 100.
-
-Use the following framework:
+Score each potential opportunity from 0 to 100.
 
 Event organiser evidence: 0-20
 
@@ -242,9 +137,7 @@ Ticmint fit: 0-5
 
 Only return opportunities with a score of 60 or higher.
 
-============================================================
 OUTPUT FIELDS
-=============
 
 For every qualified opportunity return:
 
@@ -265,125 +158,75 @@ opportunity_score
 why_this_lead
 outreach_draft
 
-============================================================
-OUTREACH RULES
-==============
+OUTREACH
 
-Write a short personalised B2B outreach message.
+Write a short personalised outreach message.
 
-The message must reference the specific problem identified
-in the conversation.
+The message must refer to the specific problem
+identified in the conversation.
 
-Do NOT write generic messages such as:
+Do NOT use generic statements such as:
 
 "Hi, Ticmint is a leading event ticketing platform."
 
-Do not pretend to know information that is not present.
+Do NOT pretend you know information that is not present
+in the source.
 
-Do not invent:
-
-* Event size
-* Revenue
-* Company information
-* Job title
-* Budget
-* Timeline
-
-The outreach should sound like a human sales message.
-
-Keep it concise.
-
-============================================================
-OUTPUT FORMAT
-=============
+The outreach should sound like a human B2B sales message.
 
 Return ONLY valid JSON.
 
-Return a JSON array.
-
-Example:
+EXPECTED JSON FORMAT:
 
 [
-{{
-"qualified": true,
-"source": "Hacker News",
-"source_id": "12345",
-"author": "username",
-"url": "https://...",
-"current_platform": "Eventbrite",
-"event_type": "Conference",
-"event_scale": "Unknown",
-"pain_category": "Fees",
-"pain_point": "The organiser is concerned about high ticketing fees.",
-"urgency": "Medium",
-"switching_intent": "High",
-"ticmint_fit": "High",
-"opportunity_score": 85,
-"why_this_lead": "The conversation shows event organiser context and explicit dissatisfaction with the current ticketing platform.",
-"outreach_draft": "Hi, noticed your point about the ticketing fees..."
-}}
+  {{
+    "qualified": true,
+    "source": "Hacker News",
+    "source_id": "12345",
+    "author": "username",
+    "url": "https://...",
+    "current_platform": "Eventbrite",
+    "event_type": "Conference",
+    "event_scale": "Unknown",
+    "pain_category": "Fees",
+    "pain_point": "Specific observed problem",
+    "urgency": "High",
+    "switching_intent": "High",
+    "ticmint_fit": "High",
+    "opportunity_score": 85,
+    "why_this_lead": "Evidence-based explanation",
+    "outreach_draft": "Short personalised outreach"
+  }}
 ]
 
-============================================================
-PUBLIC INTERNET CONVERSATIONS
-=============================
+PUBLIC CONVERSATIONS:
 
 {json.dumps(
-signals,
-ensure_ascii=False
+    signals,
+    ensure_ascii=False
 )}
 """
 
-```
-for attempt in range(1, MAX_GEMINI_RETRIES + 1):
-
     try:
-
-        print(
-            f"Gemini analysis attempt "
-            f"{attempt}/{MAX_GEMINI_RETRIES}..."
-        )
-
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                temperature=0.2,
             ),
         )
 
-        text = (response.text or "").strip()
+        text = response.text.strip()
 
         if not text:
-
-            print(
-                "Gemini returned an empty response."
-            )
-
+            print("Gemini returned an empty response.")
             return []
 
-        try:
-
-            result = json.loads(text)
-
-        except json.JSONDecodeError:
-
-            print(
-                "Gemini returned invalid JSON."
-            )
-
-            print(
-                text[:3000]
-            )
-
-            return []
+        result = json.loads(text)
 
         if not isinstance(result, list):
-
-            print(
-                "Gemini response was not a JSON array."
-            )
-
+            print("Gemini response was not a JSON array.")
             return []
 
         qualified = []
@@ -395,334 +238,259 @@ for attempt in range(1, MAX_GEMINI_RETRIES + 1):
 
             score = lead.get(
                 "opportunity_score",
-                0,
+                0
             )
 
             try:
-
                 score = int(score)
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
+            except (TypeError, ValueError):
                 score = 0
 
             if score >= 60:
-
                 lead["opportunity_score"] = score
-
                 qualified.append(lead)
 
         return qualified
 
+    except json.JSONDecodeError:
+
+        print("Gemini returned invalid JSON.")
+        print(text[:3000])
+
+        return []
+
     except Exception as error:
 
-        error_text = str(error)
-
-        print(
-            f"Gemini error on attempt "
-            f"{attempt}: {error_text}"
-        )
-
-        # ------------------------------------------------
-        # Retry temporary Gemini server errors
-        # ------------------------------------------------
-
-        if (
-            "503" in error_text
-            or "UNAVAILABLE" in error_text
-            or "high demand" in error_text.lower()
-            or "temporarily unavailable" in error_text.lower()
-        ):
-
-            if attempt < MAX_GEMINI_RETRIES:
-
-                delay = (
-                    INITIAL_RETRY_DELAY
-                    * (2 ** (attempt - 1))
-                )
-
-                print(
-                    f"Gemini appears temporarily "
-                    f"unavailable."
-                )
-
-                print(
-                    f"Waiting {delay} seconds "
-                    f"before retry..."
-                )
-
-                time.sleep(delay)
-
-                continue
-
-        # ------------------------------------------------
-        # Non-retryable error
-        # ------------------------------------------------
+        print("Gemini analysis failed:")
+        print(str(error))
 
         raise
 
-return []
-```
 
 # ============================================================
-
 # MAIN AGENT
-
 # ============================================================
 
 async def main():
 
-```
-print("=" * 60)
-print(
-    "TICMINT AUTONOMOUS DEMAND CAPTURE AGENT"
-)
-print("=" * 60)
+    print("=" * 60)
+    print("TICMINT AUTONOMOUS DEMAND CAPTURE AGENT")
+    print("=" * 60)
 
-signals = []
-qualified_leads = []
+    signals = []
+    qualified_leads = []
 
-try:
+    try:
 
-    # ====================================================
-    # CONNECT TO MCP
-    # ====================================================
-
-    print(
-        "\n[1/4] Connecting to custom MCP server..."
-    )
-
-    async with Client(mcp) as client:
+        # ====================================================
+        # CONNECT TO MCP
+        # ====================================================
 
         print(
-            "MCP connection established."
+            "\n[1/4] Connecting to custom MCP server..."
         )
 
-        # =================================================
-        # FETCH INTERNET SIGNALS
-        # =================================================
+        async with Client(mcp) as client:
 
-        print(
-            "\n[2/4] Fetching public demand signals..."
-        )
+            print(
+                "MCP connection established."
+            )
 
-        search_result = await client.call_tool(
-            "search_demand_signals"
-        )
+            # =================================================
+            # FETCH SIGNALS
+            # =================================================
 
-        signals = search_result.data or []
+            print(
+                "\n[2/4] Fetching public demand signals..."
+            )
 
-        print(
-            f"MCP returned "
-            f"{len(signals)} signals."
-        )
+            search_result = await client.call_tool(
+                "search_demand_signals"
+            )
 
-        # ------------------------------------------------
-        # Display a small sample for debugging
-        # ------------------------------------------------
+            signals = search_result.data or []
 
-        if signals:
+            print(
+                f"MCP returned {len(signals)} signals."
+            )
+
+            # =================================================
+            # DEBUG SAMPLE
+            # =================================================
 
             print(
                 "\n========== SAMPLE SIGNALS =========="
             )
 
-            for signal in signals[:2]:
+            for signal in signals[:5]:
 
                 print(
                     json.dumps(
                         signal,
-                        ensure_ascii=False,
                         indent=2,
-                    )[:3000]
-                )
-
-                print(
-                    "\n***\n"
-                )
-
-        # =================================================
-        # NO DATA
-        # =================================================
-
-        if not signals:
-
-            print(
-                "No signals found."
-            )
-
-            await client.call_tool(
-                "log_agent_run",
-                {
-                    "signals_found": 0,
-                    "qualified_leads": 0,
-                    "leads_added": 0,
-                    "duplicates": 0,
-                    "status": "NO_DATA",
-                    "error": "",
-                },
-            )
-
-            return
-
-        # =================================================
-        # GEMINI ANALYSIS
-        # =================================================
-
-        print(
-            "\n[3/4] Evaluating signals with Gemini..."
-        )
-
-        qualified_leads = analyse_signals(
-            signals
-        )
-
-        print(
-            f"Gemini identified "
-            f"{len(qualified_leads)} "
-            f"qualified opportunities."
-        )
-
-        # =================================================
-        # SAVE TO GOOGLE SHEETS
-        # =================================================
-
-        print(
-            "\n[4/4] Saving results via MCP..."
-        )
-
-        if qualified_leads:
-
-            save_result = await client.call_tool(
-                "save_qualified_leads",
-                {
-                    "leads": qualified_leads
-                },
-            )
-
-            save_data = (
-                save_result.data or {}
-            )
-
-            leads_added = save_data.get(
-                "added",
-                0,
-            )
-
-            duplicates = save_data.get(
-                "duplicates",
-                0,
-            )
-
-            save_success = save_data.get(
-                "success",
-                True,
-            )
-
-            print(
-                f"Leads added: {leads_added}"
-            )
-
-            print(
-                f"Duplicates skipped: {duplicates}"
-            )
-
-            if not save_success:
-
-                raise RuntimeError(
-                    save_data.get(
-                        "error",
-                        "Unknown Google Sheets error",
+                        ensure_ascii=False
                     )
                 )
 
-        else:
+            print(
+                "========== END SAMPLE ==========\n"
+            )
+
+            # =================================================
+            # NO DATA
+            # =================================================
+
+            if not signals:
+
+                print(
+                    "No signals found."
+                )
+
+                await client.call_tool(
+                    "log_agent_run",
+                    {
+                        "signals_found": 0,
+                        "qualified_leads": 0,
+                        "leads_added": 0,
+                        "duplicates": 0,
+                        "status": "NO_DATA",
+                        "error": "",
+                    },
+                )
+
+                return
+
+            # =================================================
+            # GEMINI ANALYSIS
+            # =================================================
+
+            print(
+                "\n[3/4] Evaluating signals with Gemini..."
+            )
+
+            qualified_leads = analyse_signals(
+                signals
+            )
+
+            print(
+                f"Gemini identified "
+                f"{len(qualified_leads)} "
+                f"qualified opportunities."
+            )
+
+            # =================================================
+            # SAVE TO GOOGLE SHEETS
+            # =================================================
+
+            print(
+                "\n[4/4] Saving results via MCP..."
+            )
 
             leads_added = 0
             duplicates = 0
 
-            print(
-                "No high-intent opportunities "
-                "were identified."
-            )
+            if qualified_leads:
 
-        # =================================================
-        # LOG SUCCESSFUL RUN
-        # =================================================
+                save_result = await client.call_tool(
+                    "save_qualified_leads",
+                    {
+                        "leads": qualified_leads
+                    },
+                )
 
-        await client.call_tool(
-            "log_agent_run",
-            {
-                "signals_found": len(signals),
-                "qualified_leads": len(
-                    qualified_leads
-                ),
-                "leads_added": leads_added,
-                "duplicates": duplicates,
-                "status": "SUCCESS",
-                "error": "",
-            },
-        )
+                save_data = (
+                    save_result.data or {}
+                )
 
-        print(
-            "\nAgent run completed successfully."
-        )
+                leads_added = save_data.get(
+                    "added",
+                    0
+                )
 
-except Exception as error:
+                duplicates = save_data.get(
+                    "duplicates",
+                    0
+                )
 
-    print(
-        "\nAGENT ERROR:"
-    )
+                print(
+                    f"Leads added: {leads_added}"
+                )
 
-    print(
-        str(error)
-    )
+                print(
+                    f"Duplicates skipped: {duplicates}"
+                )
 
-    # ----------------------------------------------------
-    # Try to log failure
-    # ----------------------------------------------------
+            else:
 
-    try:
+                print(
+                    "No high-intent opportunities "
+                    "were identified."
+                )
 
-        async with Client(mcp) as client:
+            # =================================================
+            # LOG RUN
+            # =================================================
 
             await client.call_tool(
                 "log_agent_run",
                 {
-                    "signals_found": len(
-                        signals
-                    ),
-                    "qualified_leads": len(
-                        qualified_leads
-                    ),
-                    "leads_added": 0,
-                    "duplicates": 0,
-                    "status": "ERROR",
-                    "error": str(error),
+                    "signals_found": len(signals),
+                    "qualified_leads": len(qualified_leads),
+                    "leads_added": leads_added,
+                    "duplicates": duplicates,
+                    "status": "SUCCESS",
+                    "error": "",
                 },
             )
 
-    except Exception as log_error:
+            print(
+                "\nAgent run completed successfully."
+            )
 
-        print(
-            f"Could not log failure: "
-            f"{log_error}"
-        )
+    except Exception as error:
 
-    raise
-```
+        print("\nAGENT ERROR:")
+        print(str(error))
+
+        # ----------------------------------------------------
+        # TRY TO LOG FAILURE
+        # ----------------------------------------------------
+
+        try:
+
+            async with Client(mcp) as client:
+
+                await client.call_tool(
+                    "log_agent_run",
+                    {
+                        "signals_found": len(signals),
+                        "qualified_leads": 0,
+                        "leads_added": 0,
+                        "duplicates": 0,
+                        "status": "ERROR",
+                        "error": str(error),
+                    },
+                )
+
+        except Exception as log_error:
+
+            print(
+                "Could not log failure:"
+            )
+
+            print(
+                str(log_error)
+            )
+
+        raise
+
 
 # ============================================================
-
 # START
-
 # ============================================================
 
-if **name** == "**main**":
+if __name__ == "__main__":
 
-```
-asyncio.run(main())
-```
+    asyncio.run(main())
+
+
