@@ -18,6 +18,7 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.6-flash",
 )
 
+
 # ============================================================
 # GEMINI CLIENT
 # ============================================================
@@ -48,7 +49,6 @@ def analyse_signals(
 ) -> list[dict]:
 
     if not signals:
-
         return []
 
     client = get_gemini_client()
@@ -58,22 +58,22 @@ You are a B2B Growth Lead working for Ticmint.
 
 TICMINT CONTEXT
 
-Ticmint is a white-label event ticketing and event
-management platform.
+Ticmint is a white-label event ticketing and event management
+platform.
 
-It helps event organisers operate ticketing using their
-own brand, domain and checkout while retaining control
-over attendee data.
+It helps event organisers operate ticketing using their own
+brand, domain and checkout while retaining control over
+attendee data.
 
-Your job is to identify genuine potential sales
-opportunities from public online conversations.
+Your job is to identify genuine potential sales opportunities
+from public online conversations.
 
 Do NOT simply find negative comments.
 
 A qualified opportunity should have evidence of:
 
-1. The person is likely an event organiser, event operator,
-   conference organiser, community organiser, festival
+1. The person is likely to be an event organiser, event
+   operator, conference organiser, community organiser, festival
    organiser, business running events, or someone directly
    involved in organising events.
 
@@ -119,8 +119,8 @@ Never invent facts.
 
 If something is unknown, write "Unknown".
 
-Do not assume event size, event type, company name,
-platform or urgency unless there is evidence.
+Do not assume event size, event type, company name, platform
+or urgency unless there is evidence.
 
 OPPORTUNITY SCORING
 
@@ -167,8 +167,8 @@ OUTREACH
 
 Write a short personalised outreach message.
 
-The message must refer to the specific problem
-identified in the conversation.
+The message must refer to the specific problem identified
+in the conversation.
 
 Do NOT use generic statements such as:
 
@@ -212,7 +212,11 @@ PUBLIC CONVERSATIONS:
 )}
 """
 
-       response = client.models.generate_content(
+    # ========================================================
+    # GEMINI REQUEST
+    # ========================================================
+
+    response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -220,50 +224,27 @@ PUBLIC CONVERSATIONS:
         ),
     )
 
-    text = response.text.strip()
+    # ========================================================
+    # READ GEMINI RESPONSE
+    # ========================================================
+
+    if not response.text:
+
+        print(
+            "Gemini returned an empty response."
+        )
+
+        return []
 
     text = response.text.strip()
+
+    # ========================================================
+    # PARSE JSON
+    # ========================================================
 
     try:
 
         result = json.loads(text)
-
-        if not isinstance(result, list):
-
-            print(
-                "Gemini response was not a JSON array."
-            )
-
-            return []
-
-        # ----------------------------------------------------
-        # Final safety filter
-        # ----------------------------------------------------
-
-        qualified = []
-
-        for lead in result:
-
-            score = lead.get(
-                "opportunity_score",
-                0,
-            )
-
-            try:
-
-                score = int(score)
-
-            except (TypeError, ValueError):
-
-                score = 0
-
-            if score >= 60:
-
-                lead["opportunity_score"] = score
-
-                qualified.append(lead)
-
-        return qualified
 
     except json.JSONDecodeError:
 
@@ -277,6 +258,53 @@ PUBLIC CONVERSATIONS:
 
         return []
 
+    # ========================================================
+    # VERIFY JSON STRUCTURE
+    # ========================================================
+
+    if not isinstance(result, list):
+
+        print(
+            "Gemini response was not a JSON array."
+        )
+
+        return []
+
+    # ========================================================
+    # FINAL SAFETY FILTER
+    # ========================================================
+
+    qualified = []
+
+    for lead in result:
+
+        if not isinstance(lead, dict):
+
+            continue
+
+        score = lead.get(
+            "opportunity_score",
+            0,
+        )
+
+        try:
+
+            score = int(score)
+
+        except (TypeError, ValueError):
+
+            score = 0
+
+        if score >= 60:
+
+            lead["opportunity_score"] = score
+
+            qualified.append(
+                lead
+            )
+
+    return qualified
+
 
 # ============================================================
 # MAIN AGENT
@@ -285,12 +313,15 @@ PUBLIC CONVERSATIONS:
 async def main():
 
     print("=" * 60)
+
     print(
         "TICMINT AUTONOMOUS DEMAND CAPTURE AGENT"
     )
+
     print("=" * 60)
 
     signals = []
+
     qualified_leads = []
 
     try:
@@ -412,6 +443,7 @@ async def main():
             else:
 
                 leads_added = 0
+
                 duplicates = 0
 
                 print(
@@ -451,9 +483,9 @@ async def main():
             str(error)
         )
 
-        # ----------------------------------------------------
-        # Try to log failure
-        # ----------------------------------------------------
+        # ====================================================
+        # TRY TO LOG FAILURE
+        # ====================================================
 
         try:
 
@@ -489,4 +521,6 @@ async def main():
 
 if __name__ == "__main__":
 
-    asyncio.run(main())
+    asyncio.run(
+        main()
+    )
