@@ -1,6 +1,8 @@
+```python
 import os
 import json
 import asyncio
+import time
 
 from google import genai
 from google.genai import types
@@ -18,6 +20,32 @@ GEMINI_MODEL = os.environ.get(
     "gemini-3.6-flash",
 )
 
+# Number of signals sent to Gemini in one request.
+# Smaller batches reduce prompt size and make failures
+# less likely to affect the entire run.
+BATCH_SIZE = int(
+    os.environ.get(
+        "GEMINI_BATCH_SIZE",
+        "20",
+    )
+)
+
+# Maximum number of attempts for each Gemini request.
+MAX_RETRIES = int(
+    os.environ.get(
+        "GEMINI_MAX_RETRIES",
+        "5",
+    )
+)
+
+# Initial retry delay in seconds.
+INITIAL_RETRY_DELAY = int(
+    os.environ.get(
+        "GEMINI_RETRY_DELAY",
+        "5",
+    )
+)
+
 
 # ============================================================
 # GEMINI CLIENT
@@ -25,9 +53,12 @@ GEMINI_MODEL = os.environ.get(
 
 def get_gemini_client():
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get(
+        "GEMINI_API_KEY"
+    )
 
     if not api_key:
+
         raise RuntimeError(
             "GEMINI_API_KEY environment variable is missing."
         )
@@ -38,17 +69,14 @@ def get_gemini_client():
 
 
 # ============================================================
-# AI QUALIFICATION
+# GEMINI PROMPT
 # ============================================================
 
-def analyse_signals(signals: list[dict]) -> list[dict]:
+def build_prompt(
+    signals: list[dict],
+) -> str:
 
-    if not signals:
-        return []
-
-    client = get_gemini_client()
-
-    prompt = f"""
+    return f"""
 You are a B2B Growth Lead working for Ticmint.
 
 TICMINT CONTEXT
@@ -68,14 +96,14 @@ Do NOT simply find negative comments.
 A qualified opportunity should have evidence of:
 
 1. The person is likely an event organiser, event operator,
-conference organiser, community organiser, festival organiser,
-business running events, or someone directly involved in
-organising events.
+   conference organiser, community organiser, festival
+   organiser, business running events, or someone directly
+   involved in organising events.
 
 AND
 
 2. They are discussing ticketing, event registration,
-Eventbrite, ticketing software, or a similar platform.
+   Eventbrite, ticketing software, or a similar platform.
 
 AND
 
@@ -207,64 +235,324 @@ PUBLIC CONVERSATIONS:
 )}
 """
 
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-            ),
-        )
 
-        text = response.text.strip()
+# ============================================================
+# GEMINI SINGLE BATCH
+# ============================================================
 
-        if not text:
-            print("Gemini returned an empty response.")
-            return []
+def analyse_batch(
+    signals: list[dict],
+) -> tuple[list[dict], bool]:
 
-        result = json.loads(text)
+    if not signals:
 
-        if not isinstance(result, list):
-            print("Gemini response was not a JSON array.")
-            return []
+        return [], True
 
-        qualified = []
+    client = get_gemini_client()
 
-        for lead in result:
+    prompt = build_prompt(
+        signals
+    )
 
-            if not isinstance(lead, dict):
-                continue
+    for attempt in range(
+        1,
+        MAX_RETRIES + 1,
+    ):
 
-            score = lead.get(
-                "opportunity_score",
-                0
+        try:
+
+            print(
+                f"Gemini: Analysing batch of "
+                f"{len(signals)} signals "
+                f"(attempt {attempt}/{MAX_RETRIES})..."
             )
 
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
+            )
+
+            if not response.text:
+
+                print(
+                    "Gemini returned an empty response."
+                )
+
+                return [], False
+
+            text = response.text.strip()
+
             try:
-                score = int(score)
-            except (TypeError, ValueError):
-                score = 0
 
-            if score >= 60:
-                lead["opportunity_score"] = score
-                qualified.append(lead)
+                result = json.loads(text)
 
-        return qualified
+            except json.JSONDecodeError:
 
-    except json.JSONDecodeError:
+                print(
+                    "Gemini returned invalid JSON."
+                )
 
-        print("Gemini returned invalid JSON.")
-        print(text[:3000])
+                print(
+                    text[:2000]
+                )
 
-        return []
+                return [], False
 
-    except Exception as error:
+            if not isinstance(result, list):
 
-        print("Gemini analysis failed:")
-        print(str(error))
+                print(
+                    "Gemini response was not a JSON array."
+                )
 
-        raise
+                return [], False
+
+            qualified = []
+
+            for lead in result:
+
+                if not isinstance(
+                    lead,
+                    dict,
+                ):
+
+                    continue
+
+                score = lead.get(
+                    "opportunity_score",
+                    0,
+                )
+
+                try:
+
+                    score = int(
+                        score
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+
+                    score = 0
+
+                if score >= 60:
+
+                    lead["opportunity_score"] = score
+
+                    qualified.append(
+                        lead
+                    )
+
+            print(
+                f"Gemini: Batch produced "
+                f"{len(qualified)} qualified opportunities."
+            )
+
+            return qualified, True
+
+        except Exception as error:
+
+            error_text = str(
+                error
+            )
+
+            print(
+                f"Gemini error on attempt "
+                f"{attempt}: {error_text}"
+            )
+
+            # ------------------------------------------------
+            # Retry temporary server errors
+            # ------------------------------------------------
+
+            if (
+                "503" in error_text
+                or "UNAVAILABLE" in error_text
+                or "429" in error_text
+                or "RESOURCE_EXHAUSTED" in error_text
+                or "500" in error_text
+                or "502" in error_text
+                or "504" in error_text
+            ):
+
+                if attempt < MAX_RETRIES:
+
+                    delay = (
+                        INITIAL_RETRY_DELAY
+                        * (
+                            2 ** (
+                                attempt - 1
+                            )
+                        )
+                    )
+
+                    print(
+                        f"Gemini temporarily unavailable. "
+                        f"Retrying in {delay} seconds..."
+                    )
+
+                    time.sleep(
+                        delay
+                    )
+
+                    continue
+
+            # ------------------------------------------------
+            # Non-retryable error
+            # ------------------------------------------------
+
+            print(
+                "Gemini batch failed permanently."
+            )
+
+            return [], False
+
+    return [], False
+
+
+# ============================================================
+# AI QUALIFICATION
+# ============================================================
+
+def analyse_signals(
+    signals: list[dict],
+) -> tuple[list[dict], bool]:
+
+    if not signals:
+
+        return [], True
+
+    print(
+        f"Gemini: Total signals to analyse: "
+        f"{len(signals)}"
+    )
+
+    batches = []
+
+    for start in range(
+        0,
+        len(signals),
+        BATCH_SIZE,
+    ):
+
+        batches.append(
+            signals[
+                start:start + BATCH_SIZE
+            ]
+        )
+
+    print(
+        f"Gemini: Processing "
+        f"{len(batches)} batches "
+        f"of up to {BATCH_SIZE} signals."
+    )
+
+    all_qualified = []
+
+    successful_batches = 0
+    failed_batches = 0
+
+    for index, batch in enumerate(
+        batches,
+        start=1,
+    ):
+
+        print(
+            f"\nGemini batch "
+            f"{index}/{len(batches)}"
+        )
+
+        qualified, success = analyse_batch(
+            batch
+        )
+
+        if success:
+
+            successful_batches += 1
+
+            all_qualified.extend(
+                qualified
+            )
+
+        else:
+
+            failed_batches += 1
+
+            print(
+                f"Gemini: Batch "
+                f"{index} failed."
+            )
+
+    # --------------------------------------------------------
+    # Remove duplicate leads
+    # --------------------------------------------------------
+
+    unique_leads = {}
+
+    for lead in all_qualified:
+
+        source_id = str(
+            lead.get(
+                "source_id",
+                "",
+            )
+        ).strip()
+
+        if source_id:
+
+            unique_leads[
+                source_id
+            ] = lead
+
+    final_leads = list(
+        unique_leads.values()
+    )
+
+    print(
+        "\nGemini analysis complete."
+    )
+
+    print(
+        f"Successful batches: "
+        f"{successful_batches}"
+    )
+
+    print(
+        f"Failed batches: "
+        f"{failed_batches}"
+    )
+
+    print(
+        f"Qualified opportunities: "
+        f"{len(final_leads)}"
+    )
+
+    # --------------------------------------------------------
+    # Overall success state
+    # --------------------------------------------------------
+
+    if failed_batches == 0:
+
+        return final_leads, True
+
+    if successful_batches > 0:
+
+        print(
+            "Gemini completed partially. "
+            "Some batches failed."
+        )
+
+        return final_leads, False
+
+    print(
+        "Gemini analysis failed completely."
+    )
+
+    return [], False
 
 
 # ============================================================
@@ -274,10 +562,15 @@ PUBLIC CONVERSATIONS:
 async def main():
 
     print("=" * 60)
-    print("TICMINT AUTONOMOUS DEMAND CAPTURE AGENT")
+
+    print(
+        "TICMINT AUTONOMOUS DEMAND CAPTURE AGENT"
+    )
+
     print("=" * 60)
 
     signals = []
+
     qualified_leads = []
 
     try:
@@ -308,32 +601,14 @@ async def main():
                 "search_demand_signals"
             )
 
-            signals = search_result.data or []
-
-            print(
-                f"MCP returned {len(signals)} signals."
+            signals = (
+                search_result.data
+                or []
             )
 
-            # =================================================
-            # DEBUG SAMPLE
-            # =================================================
-
             print(
-                "\n========== SAMPLE SIGNALS =========="
-            )
-
-            for signal in signals[:5]:
-
-                print(
-                    json.dumps(
-                        signal,
-                        indent=2,
-                        ensure_ascii=False
-                    )
-                )
-
-            print(
-                "========== END SAMPLE ==========\n"
+                f"MCP returned "
+                f"{len(signals)} signals."
             )
 
             # =================================================
@@ -361,6 +636,28 @@ async def main():
                 return
 
             # =================================================
+            # PRINT SAMPLE SIGNALS
+            # =================================================
+
+            print(
+                "\n========== SAMPLE SIGNALS =========="
+            )
+
+            for sample in signals[:2]:
+
+                print(
+                    json.dumps(
+                        sample,
+                        indent=2,
+                        ensure_ascii=False,
+                    )[:3000]
+                )
+
+                print(
+                    "\n***\n"
+                )
+
+            # =================================================
             # GEMINI ANALYSIS
             # =================================================
 
@@ -368,8 +665,10 @@ async def main():
                 "\n[3/4] Evaluating signals with Gemini..."
             )
 
-            qualified_leads = analyse_signals(
-                signals
+            qualified_leads, analysis_success = (
+                analyse_signals(
+                    signals
+                )
             )
 
             print(
@@ -399,32 +698,55 @@ async def main():
                 )
 
                 save_data = (
-                    save_result.data or {}
+                    save_result.data
+                    or {}
                 )
 
                 leads_added = save_data.get(
                     "added",
-                    0
+                    0,
                 )
 
                 duplicates = save_data.get(
                     "duplicates",
-                    0
+                    0,
                 )
 
                 print(
-                    f"Leads added: {leads_added}"
+                    f"Leads added: "
+                    f"{leads_added}"
                 )
 
                 print(
-                    f"Duplicates skipped: {duplicates}"
+                    f"Duplicates skipped: "
+                    f"{duplicates}"
                 )
 
             else:
 
                 print(
-                    "No high-intent opportunities "
+                    "No qualified opportunities "
                     "were identified."
+                )
+
+            # =================================================
+            # DETERMINE RUN STATUS
+            # =================================================
+
+            if analysis_success:
+
+                run_status = "SUCCESS"
+
+                run_error = ""
+
+            else:
+
+                run_status = "PARTIAL"
+
+                run_error = (
+                    "One or more Gemini analysis "
+                    "batches failed. "
+                    "Successful batches were still saved."
                 )
 
             # =================================================
@@ -434,26 +756,40 @@ async def main():
             await client.call_tool(
                 "log_agent_run",
                 {
-                    "signals_found": len(signals),
-                    "qualified_leads": len(qualified_leads),
+                    "signals_found": len(
+                        signals
+                    ),
+                    "qualified_leads": len(
+                        qualified_leads
+                    ),
                     "leads_added": leads_added,
                     "duplicates": duplicates,
-                    "status": "SUCCESS",
-                    "error": "",
+                    "status": run_status,
+                    "error": run_error,
                 },
             )
 
             print(
-                "\nAgent run completed successfully."
+                "\nAgent run completed."
+            )
+
+            print(
+                f"Final status: "
+                f"{run_status}"
             )
 
     except Exception as error:
 
-        print("\nAGENT ERROR:")
-        print(str(error))
+        print(
+            "\nAGENT ERROR:"
+        )
+
+        print(
+            str(error)
+        )
 
         # ----------------------------------------------------
-        # TRY TO LOG FAILURE
+        # Try to log failure
         # ----------------------------------------------------
 
         try:
@@ -463,23 +799,26 @@ async def main():
                 await client.call_tool(
                     "log_agent_run",
                     {
-                        "signals_found": len(signals),
-                        "qualified_leads": 0,
+                        "signals_found": len(
+                            signals
+                        ),
+                        "qualified_leads": len(
+                            qualified_leads
+                        ),
                         "leads_added": 0,
                         "duplicates": 0,
                         "status": "ERROR",
-                        "error": str(error),
+                        "error": str(
+                            error
+                        ),
                     },
                 )
 
         except Exception as log_error:
 
             print(
-                "Could not log failure:"
-            )
-
-            print(
-                str(log_error)
+                f"Could not log failure: "
+                f"{log_error}"
             )
 
         raise
@@ -491,4 +830,7 @@ async def main():
 
 if __name__ == "__main__":
 
-    asyncio.run(main())
+    asyncio.run(
+        main()
+    )
+```
